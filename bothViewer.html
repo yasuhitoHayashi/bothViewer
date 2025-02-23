@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Both Viewer</title>
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      background-color: #222;
+      color: #eee;
+    }
+    .card-header {
+      background-color: #333;
+      color: #eee;
+    }
+    .card {
+      background-color: #2a2a2a;
+      border: none;
+    }
+    .navbar, .btn {
+      border-radius: 0;
+    }
+  </style>
+</head>
+<body>
+  <!-- Toast Container for non-blocking notifications -->
+  <div id="toast-container" class="position-fixed top-0 end-0 p-3" style="z-index: 1100;"></div>
+  
+  <!-- Navigation Bar -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="#">Both Viewer</a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" 
+              aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+         <span class="navbar-toggler-icon"></span>
+      </button>
+    </div>
+  </nav>
+  
+  <!-- Main Content: 左側に動画、右側に設定パネル -->
+  <div class="container my-4">
+    <div class="row">
+      <!-- 動画表示エリア -->
+      <div class="col-lg-9">
+        <!-- レイアウト切替ボタン -->
+        <div class="mb-3 text-center">
+          <button id="toggleLayoutBtn" class="btn btn-secondary" onclick="toggleLayout()">Switch to Vertical Layout</button>
+        </div>
+        <div class="row" id="videoRow">
+          <div class="col-lg-6 video-col mb-4">
+            <div class="card">
+              <div class="card-header">EVS Video Stream</div>
+              <div class="card-body text-center">
+                <!-- clickable-video クラスを付与 -->
+                <img id="evsVideo" src="http://127.0.0.1:5001/video_feed" alt="EVS Video Stream" class="img-fluid clickable-video">
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-6 video-col mb-4">
+            <div class="card">
+              <div class="card-header">Frame Camera Stream</div>
+              <div class="card-body text-center">
+                <img id="frameVideo" src="http://127.0.0.1:5002/video_feed" alt="Frame Camera Stream" class="img-fluid clickable-video">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- 設定パネル -->
+      <div class="col-lg-3">
+        <div class="accordion" id="settingsAccordion">
+          <!-- Save Settings -->
+          <div class="accordion-item mb-2">
+            <h2 class="accordion-header" id="headingSave">
+              <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseSave" aria-expanded="true" aria-controls="collapseSave">
+                Save Settings
+              </button>
+            </h2>
+            <div id="collapseSave" class="accordion-collapse collapse show" aria-labelledby="headingSave" data-bs-parent="#settingsAccordion">
+              <div class="accordion-body">
+                <div class="mb-3">
+                  <label for="save_location" class="form-label">Save Directory</label>
+                  <input type="text" class="form-control" id="save_location">
+                </div>
+                <div class="mb-3">
+                  <label for="save_filename" class="form-label">Save Filename</label>
+                  <input type="text" class="form-control" id="save_filename">
+                </div>
+                <button class="btn btn-primary w-100" onclick="updateSave()">Update Save Settings</button>
+              </div>
+            </div>
+          </div>
+          <!-- Bias Settings -->
+          <div class="accordion-item mb-2">
+            <h2 class="accordion-header" id="headingBias">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseBias" aria-expanded="false" aria-controls="collapseBias">
+                Bias Settings
+              </button>
+            </h2>
+            <div id="collapseBias" class="accordion-collapse collapse" aria-labelledby="headingBias" data-bs-parent="#settingsAccordion">
+              <div class="accordion-body">
+                <div class="mb-3">
+                  <label for="bias_on" class="form-label">Bias Diff ON</label>
+                  <input type="number" class="form-control" id="bias_on" value="0">
+                </div>
+                <div class="mb-3">
+                  <label for="bias_off" class="form-label">Bias Diff OFF</label>
+                  <input type="number" class="form-control" id="bias_off" value="0">
+                </div>
+                <button class="btn btn-primary w-100" onclick="setBias()">Update Bias</button>
+              </div>
+            </div>
+          </div>
+          <!-- Trigger In Settings -->
+          <div class="accordion-item mb-2">
+            <h2 class="accordion-header" id="headingTrigger">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTrigger" aria-expanded="false" aria-controls="collapseTrigger">
+                Trigger In Settings
+              </button>
+            </h2>
+            <div id="collapseTrigger" class="accordion-collapse collapse" aria-labelledby="headingTrigger" data-bs-parent="#settingsAccordion">
+              <div class="accordion-body">
+                <div class="form-check mb-3">
+                  <input type="checkbox" class="form-check-input" id="trigger_in">
+                  <label class="form-check-label" for="trigger_in">Enable Trigger In</label>
+                </div>
+                <button class="btn btn-primary w-100" onclick="setTrigger()">Update Trigger</button>
+              </div>
+            </div>
+          </div>
+          <!-- Exposure Settings -->
+          <div class="accordion-item mb-2">
+            <h2 class="accordion-header" id="headingExposure">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseExposure" aria-expanded="false" aria-controls="collapseExposure">
+                Exposure Settings
+              </button>
+            </h2>
+            <div id="collapseExposure" class="accordion-collapse collapse" aria-labelledby="headingExposure" data-bs-parent="#settingsAccordion">
+              <div class="accordion-body">
+                <div class="d-grid gap-2">
+                  <button class="btn btn-secondary" onclick="setExposure('Once')">AutoExposure Once</button>
+                  <button class="btn btn-secondary" onclick="setExposure('Continuous')">Continuous</button>
+                </div>
+                <div class="input-group mt-2">
+                  <input type="number" id="exposure_manual_value" class="form-control" placeholder="Manual Exposure Value">
+                  <button class="btn btn-secondary" onclick="setExposureManual()">Set Manual Exposure</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Gain Settings -->
+          <div class="accordion-item mb-2">
+            <h2 class="accordion-header" id="headingGain">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseGain" aria-expanded="false" aria-controls="collapseGain">
+                Gain Settings
+              </button>
+            </h2>
+            <div id="collapseGain" class="accordion-collapse collapse" aria-labelledby="headingGain" data-bs-parent="#settingsAccordion">
+              <div class="accordion-body">
+                <div class="d-grid gap-2">
+                  <button class="btn btn-secondary" onclick="setGain('Once')">AutoGain Once</button>
+                  <button class="btn btn-secondary" onclick="setGain('Continuous')">Continuous</button>
+                </div>
+                <div class="input-group mt-2">
+                  <input type="number" id="gain_manual_value" class="form-control" placeholder="Manual Gain Value">
+                  <button class="btn btn-secondary" onclick="setGainManual()">Set Manual Gain</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- White Balance Settings -->
+          <div class="accordion-item mb-2">
+            <h2 class="accordion-header" id="headingWB">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseWB" aria-expanded="false" aria-controls="collapseWB">
+                White Balance Settings
+              </button>
+            </h2>
+            <div id="collapseWB" class="accordion-collapse collapse" aria-labelledby="headingWB" data-bs-parent="#settingsAccordion">
+              <div class="accordion-body">
+                <div class="d-grid gap-2">
+                  <button class="btn btn-secondary" onclick="setWhiteBalance('Once')">AutoWhiteBalance Once</button>
+                  <button class="btn btn-secondary" onclick="setWhiteBalance('Continuous')">Continuous</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Interval Recording Settings -->
+          <div class="accordion-item mb-2">
+            <h2 class="accordion-header" id="headingInterval">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseInterval" aria-expanded="false" aria-controls="collapseInterval">
+                Interval Recording
+              </button>
+            </h2>
+            <div id="collapseInterval" class="accordion-collapse collapse" aria-labelledby="headingInterval" data-bs-parent="#settingsAccordion">
+              <div class="accordion-body">
+                <div class="mb-3">
+                  <label for="interval_sec" class="form-label">Interval (seconds)</label>
+                  <input type="number" class="form-control" id="interval_sec" value="60">
+                </div>
+                <div class="mb-3">
+                  <label for="duration_sec" class="form-label">Recording Duration (seconds)</label>
+                  <input type="number" class="form-control" id="duration_sec" value="10">
+                </div>
+                <div class="d-grid gap-2">
+                  <button class="btn btn-secondary" onclick="startIntervalRecording()">Start Interval Recording</button>
+                  <button class="btn btn-secondary" onclick="stopIntervalRecording()">Stop Interval Recording</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Recording Control -->
+          <div class="accordion-item">
+            <h2 class="accordion-header" id="headingRecording">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseRecording" aria-expanded="false" aria-controls="collapseRecording">
+                Recording Control
+              </button>
+            </h2>
+            <div id="collapseRecording" class="accordion-collapse collapse" aria-labelledby="headingRecording" data-bs-parent="#settingsAccordion">
+              <div class="accordion-body">
+                <div class="d-grid gap-2">
+                  <button class="btn btn-danger" onclick="startRecording()">Start Recording</button>
+                  <button class="btn btn-danger" onclick="stopRecording()">Stop Recording</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div> <!-- end accordion -->
+      </div>
+    </div>
+  </div>
+  
+  <!-- Bootstrap Modal for Maximized Video -->
+  <div class="modal fade" id="videoModal" tabindex="-1" aria-labelledby="videoModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-fullscreen">
+      <div class="modal-content bg-dark">
+        <div class="modal-header border-0">
+          <h5 class="modal-title text-light" id="videoModalLabel">Video Viewer</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body p-0 text-center">
+          <img id="modalVideo" src="" alt="Maximized Video" class="img-fluid">
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Bootstrap JS Bundle -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // 動画レイアウト状態（true=横並び、false=縦並び）
+    let isHorizontal = true;
+    function toggleLayout() {
+      const videoCols = document.querySelectorAll('.video-col');
+      const toggleBtn = document.getElementById('toggleLayoutBtn');
+      videoCols.forEach(col => {
+        if (isHorizontal) {
+          col.classList.remove('col-lg-6');
+          col.classList.add('col-12');
+        } else {
+          col.classList.remove('col-12');
+          col.classList.add('col-lg-6');
+        }
+      });
+      isHorizontal = !isHorizontal;
+      toggleBtn.textContent = isHorizontal ? "Switch to Vertical Layout" : "Switch to Horizontal Layout";
+    }
+    
+    // Toast 表示（1秒）
+    function showToast(message) {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = 'toast align-items-center text-bg-primary border-0';
+      toast.setAttribute('role', 'alert');
+      toast.setAttribute('aria-live', 'assertive');
+      toast.setAttribute('aria-atomic', 'true');
+      toast.innerHTML = `<div class="d-flex"><div class="toast-body">${message}</div></div>`;
+      container.appendChild(toast);
+      const bsToast = new bootstrap.Toast(toast, { delay: 1000 });
+      bsToast.show();
+      setTimeout(() => { container.removeChild(toast); }, 1100);
+    }
+    
+    // Exposure と Gain の manual 値更新
+    function updateExposureManualField() {
+      fetch('http://127.0.0.1:5002/get_settings')
+        .then(response => response.json())
+        .then(data => {
+          if (data.status === "success") {
+            document.getElementById("exposure_manual_value").value = data.exposure;
+            document.getElementById("gain_manual_value").value = data.gain;
+          }
+        })
+        .catch(err => console.error(err));
+    }
+    window.addEventListener("load", updateExposureManualField);
+    
+    // ページ読み込み時に URL から保存先ディレクトリを設定
+    (function setDefaultDirectory() {
+      var url = window.location.href;
+      var defaultDir = url.substring(0, url.lastIndexOf('/'));
+      if (defaultDir.indexOf("file://") === 0) {
+        defaultDir = defaultDir.replace("file://", "");
+      }
+      document.getElementById("save_location").value = defaultDir;
+    })();
+    
+    function updateSave() {
+      var save_location = document.getElementById("save_location").value;
+      var save_filename = document.getElementById("save_filename").value;
+      Promise.all([
+        fetch('http://127.0.0.1:5001/set_save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ save_location: save_location, save_filename: save_filename })
+        }).then(res => res.json()),
+        fetch('http://127.0.0.1:5002/set_save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ save_location: save_location, save_filename: save_filename })
+        }).then(res => res.json())
+      ])
+      .then(results => {
+        showToast("EVS: " + results[0].message + " | Frame: " + results[1].message);
+      })
+      .catch(err => console.error(err));
+    }
+    
+    function setBias() {
+      var bias_on = parseInt(document.getElementById("bias_on").value);
+      var bias_off = parseInt(document.getElementById("bias_off").value);
+      fetch('http://127.0.0.1:5001/set_bias', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bias_diff_on: bias_on, bias_diff_off: bias_off })
+      })
+      .then(response => response.json())
+      .then(data => showToast("EVS: " + data.message))
+      .catch(err => console.error(err));
+    }
+    
+    function setTrigger() {
+      var trigger = document.getElementById("trigger_in").checked;
+      fetch('http://127.0.0.1:5001/set_trigger', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trigger: trigger })
+      })
+      .then(response => response.json())
+      .then(data => showToast("EVS: " + data.message))
+      .catch(err => console.error(err));
+    }
+    
+    function setExposure(mode) {
+      fetch('http://127.0.0.1:5002/set_exposure', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: mode })
+      })
+      .then(response => response.json())
+      .then(data => {
+        showToast("Frame: " + data.message);
+        updateExposureManualField();
+      })
+      .catch(err => console.error(err));
+    }
+    
+    function setExposureManual() {
+      var manual_value = document.getElementById("exposure_manual_value").value;
+      fetch('http://127.0.0.1:5002/set_exposure', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'Manual', value: manual_value })
+      })
+      .then(response => response.json())
+      .then(data => {
+        showToast("Frame: " + data.message);
+        updateExposureManualField();
+      })
+      .catch(err => console.error(err));
+    }
+    
+    function setGain(mode) {
+      fetch('http://127.0.0.1:5002/set_gain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: mode })
+      })
+      .then(response => response.json())
+      .then(data => {
+        showToast("Frame: " + data.message);
+        updateExposureManualField();
+      })
+      .catch(err => console.error(err));
+    }
+    
+    function setGainManual() {
+      var manual_value = document.getElementById("gain_manual_value").value;
+      fetch('http://127.0.0.1:5002/set_gain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'Manual', value: manual_value })
+      })
+      .then(response => response.json())
+      .then(data => {
+        showToast("Frame: " + data.message);
+        updateExposureManualField();
+      })
+      .catch(err => console.error(err));
+    }
+    
+    function setWhiteBalance(mode) {
+      fetch('http://127.0.0.1:5002/set_whitebalance', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: mode })
+      })
+      .then(response => response.json())
+      .then(data => showToast("Frame: " + data.message))
+      .catch(err => console.error(err));
+    }
+    
+    function startRecording() {
+      Promise.all([
+        fetch('http://127.0.0.1:5001/start_recording', { method: 'POST' }).then(res => res.json()),
+        fetch('http://127.0.0.1:5002/start_recording', { method: 'POST' }).then(res => res.json())
+      ])
+      .then(results => {
+        showToast("EVS: " + results[0].message + " | Frame: " + results[1].message);
+      })
+      .catch(err => console.error(err));
+    }
+    
+    function stopRecording() {
+      Promise.all([
+        fetch('http://127.0.0.1:5001/stop_recording', { method: 'POST' }).then(res => res.json()),
+        fetch('http://127.0.0.1:5002/stop_recording', { method: 'POST' }).then(res => res.json())
+      ])
+      .then(results => {
+        showToast("EVS: " + results[0].message + " | Frame: " + results[1].message);
+      })
+      .catch(err => console.error(err));
+    }
+    
+    var intervalTimer = null;
+    var recordingTimeout = null;
+    function startIntervalRecording() {
+      var intervalSec = parseFloat(document.getElementById("interval_sec").value);
+      var durationSec = parseFloat(document.getElementById("duration_sec").value);
+      if (isNaN(intervalSec) || isNaN(durationSec) || intervalSec <= 0 || durationSec <= 0) {
+        showToast("Please enter valid numbers for interval and duration.");
+        return;
+      }
+      if (durationSec > intervalSec) {
+        showToast("Recording duration must be less than or equal to the interval.");
+        return;
+      }
+      startRecording();
+      recordingTimeout = setTimeout(function() { stopRecording(); }, durationSec * 1000);
+      intervalTimer = setInterval(function() {
+        startRecording();
+        recordingTimeout = setTimeout(function() { stopRecording(); }, durationSec * 1000);
+      }, intervalSec * 1000);
+    }
+    
+    function stopIntervalRecording() {
+      if (intervalTimer !== null) {
+        clearInterval(intervalTimer);
+        intervalTimer = null;
+      }
+      if (recordingTimeout !== null) {
+        clearTimeout(recordingTimeout);
+        recordingTimeout = null;
+      }
+      stopRecording();
+    }
+    
+    // 動画をクリックした際にモーダルで最大化表示
+    document.addEventListener("DOMContentLoaded", function() {
+      const clickableVideos = document.querySelectorAll('.clickable-video');
+      clickableVideos.forEach(video => {
+        video.style.cursor = "pointer";
+        video.addEventListener("click", function() {
+          openVideoModal(this.src);
+        });
+      });
+    });
+    
+    var videoModal = new bootstrap.Modal(document.getElementById("videoModal"));
+    function openVideoModal(src) {
+      document.getElementById("modalVideo").src = src;
+      videoModal.show();
+    }
+  </script>
+</body>
+</html>
