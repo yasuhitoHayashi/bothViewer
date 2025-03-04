@@ -1,4 +1,9 @@
-#!/usr/bin/env python3
+"""
+@author: HAYASHI Yasuhito (dangom_ya)
+
+CopyPolicy: 
+    Released under the terms of the LGPLv2.1 or later.
+"""
 import subprocess
 import webbrowser
 import time
@@ -6,7 +11,6 @@ import os
 import sys
 
 def main():
-    # スクリプトのパス（必要に応じて相対パスや絶対パスを調整）
     evs_script = os.path.join(os.path.dirname(__file__), "evsStreamer.py")
     frame_script = os.path.join(os.path.dirname(__file__), "frameStreamer.py")
     html_file = os.path.join(os.path.dirname(__file__), "bothViewer.html")
@@ -14,10 +18,8 @@ def main():
     evs_proc = subprocess.Popen([sys.executable, evs_script, "--port", "5001"])
     frame_proc = subprocess.Popen([sys.executable, frame_script, "--port", "5002"])
     
-    # 少し待って各サーバーが起動するのを待機（必要に応じて調整）
     time.sleep(5)
     
-    # bothViewer.html を既定のブラウザで開く
     html_url = "file:///" + os.path.abspath(html_file)
     webbrowser.open(html_url)
     

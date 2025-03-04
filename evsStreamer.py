@@ -1,4 +1,9 @@
-#!/usr/bin/env python3
+"""
+@author: HAYASHI Yasuhito (dangom_ya)
+
+CopyPolicy: 
+    Released under the terms of the LGPLv2.1 or later.
+"""
 import argparse
 import os
 import threading
@@ -15,6 +20,9 @@ from metavision_core.event_io import EventsIterator, LiveReplayEventsIterator, i
 from metavision_sdk_core import PeriodicFrameGenerationAlgorithm, ColorPalette
 from metavision_sdk_ui import EventLoop
 from metavision_core.event_io.raw_reader import initiate_device
+
+# 追加：YAML 設定管理用モジュール
+from config_manager import load_config, save_config, save_config_snapshot
 
 # --------------------------------------------------
 # EVSStreamer クラス（Tkinter 不使用版）
@@ -137,6 +145,11 @@ class EVSStreamer:
             print("録画はライブカメラのみ利用可能です。")
             return False
         if not self.recording:
+            # 録画開始時に現在の設定をスナップショットとして保存
+            current_config = load_config()
+            snapshot_path = save_config_snapshot(current_config, self.save_location)
+            print("設定スナップショットを保存しました:", snapshot_path)
+
             # タイムスタンプ取得
             base = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             # ユーザー入力があれば、_入力 を付与
@@ -175,7 +188,6 @@ class EVSStreamer:
 # --------------------------------------------------
 app = Flask(__name__)
 
-# CORS 対応（どのオリジンからでもアクセス可能にする）
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')

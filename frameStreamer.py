@@ -1,4 +1,9 @@
-#!/usr/bin/env python3
+"""
+@author: HAYASHI Yasuhito (dangom_ya)
+
+CopyPolicy: 
+    Released under the terms of the LGPLv2.1 or later.
+"""
 import argparse
 import os
 import threading
@@ -12,35 +17,39 @@ import numpy as np
 from PIL import Image
 import ffmpeg  # pip install ffmpeg-python
 import subprocess
-import configparser
-
-# vmbpy 関連のインポート
-from vmbpy import VmbSystem, Frame, FrameStatus
-import global_calc as g_calc
 from flask import Flask, Response, request, jsonify
+import global_calc as g_calc
+from config_manager import load_config, save_config, save_config_snapshot
 
 import queue
 
 #######################################
-# 設定ファイルからパラメータ読み込み
+# YAML 設定ファイルからパラメータ読み込み
 #######################################
-config = configparser.ConfigParser()
-config.read('config.ini', encoding="utf-8")
-conf_camera01 = 'camera01_spec'
-conf_camera02 = 'camera02_spec'
-common = 'common'
-user_setting = 'user_setting'
-FRAME_RESOLUTION_W = int(config.get(conf_camera01, 'resolution_w'))
-FRAME_RESOLUTION_H = int(config.get(conf_camera01, 'resolution_h'))
-EVENT_RESOLUTION_W = int(config.get(conf_camera02, 'resolution_w'))
-EVENT_RESOLUTION_H = int(config.get(conf_camera02, 'resolution_h'))
-FRAME_PIXCEL_W = float(config.get(conf_camera01, 'pixcel_w'))
-FRAME_PIXCEL_H = float(config.get(conf_camera01, 'pixcel_h'))
-EVENT_PIXCEL_W = float(config.get(conf_camera02, 'pixcel_w'))
-EVENT_PIXCEL_H = float(config.get(conf_camera02, 'pixcel_h'))
-FRAME_QUEUE_SIZE = int(config.get(common, 'frame_queue_size'))
-ADJUST_VIEW_W = int(config.get(user_setting, 'adjust_view_w'))
-ADJUST_VIEW_H = int(config.get(user_setting, 'adjust_view_h'))
+config_data = load_config()
+
+# bothViewHW セクションからフレームカメラとイベントカメラのハードウェア情報を取得
+frame_resolution = config_data["bothViewHW"]["frameCamHW"]["resolution"]
+FRAME_RESOLUTION_W = int(frame_resolution[0])
+FRAME_RESOLUTION_H = int(frame_resolution[1])
+
+event_resolution = config_data["bothViewHW"]["eventCamHW"]["resolution"]
+EVENT_RESOLUTION_W = int(event_resolution[0])
+EVENT_RESOLUTION_H = int(event_resolution[1])
+
+frame_pixel = config_data["bothViewHW"]["frameCamHW"]["pixel"]
+FRAME_PIXCEL_W = float(frame_pixel["width"])
+FRAME_PIXCEL_H = float(frame_pixel["height"])
+
+event_pixel = config_data["bothViewHW"]["eventCamHW"]["pixel"]
+EVENT_PIXCEL_W = float(event_pixel["width"])
+EVENT_PIXCEL_H = float(event_pixel["height"])
+
+FRAME_QUEUE_SIZE = 10
+
+adjust_view = config_data["bothViewHW"]["frameCamHW"]["frame_shift"]
+ADJUST_VIEW_W = int(adjust_view["width"])
+ADJUST_VIEW_H = int(adjust_view["height"])
 
 #######################################
 # g_value の定義（各種計算用）
@@ -111,6 +120,7 @@ class CameraThread(threading.Thread):
         self.cam = None  # 追加：外部アクセス用にカメラインスタンスを保持
 
     def run(self):
+        from vmbpy import VmbSystem, Frame, FrameStatus
         vmb = VmbSystem.get_instance()
         with vmb:
             cams = vmb.get_all_cameras()
@@ -125,7 +135,6 @@ class CameraThread(threading.Thread):
                 cam.TriggerSource.set('Line0')
                 cam.LineInverter.set(True)
                 print("トリガアウト設定完了")
-                # センサーサイズや ROI の設定
                 frame_sensor_w, frame_sensor_h = g_calc.get_cencer_size(
                     (FRAME_RESOLUTION_W, FRAME_RESOLUTION_H),
                     (FRAME_PIXCEL_W, FRAME_PIXCEL_H))
@@ -155,7 +164,8 @@ class CameraThread(threading.Thread):
                     time.sleep(0.01)
                 cam.stop_streaming()
 
-    def frame_callback(self, cam, stream, frame: Frame):
+    def frame_callback(self, cam, stream, frame):
+        from vmbpy import FrameStatus
         if frame.get_status() == FrameStatus.Complete:
             try:
                 frame_np = frame.as_opencv_image()
@@ -185,12 +195,12 @@ class CameraThread(threading.Thread):
         self.running = False
 
 #######################################
-# FrameStreamer クラス（フレームカメラ用 headless 版）
+# FrameStreamer クラス
 #######################################
 class FrameStreamer:
     def __init__(self, save_location, display_factor=0.5):
         self.save_location = save_location
-        self.save_filename = ""  # Web から更新可能なファイル名設定
+        self.save_filename = ""  # ファイル名設定
         self.latest_frame = None  # 最新フレーム（PIL Image）
         self.recording = False
         self.recording_file = None
@@ -198,13 +208,16 @@ class FrameStreamer:
         # フレームカメラ用キュー
         self.frame_queue = queue.Queue(maxsize=FRAME_QUEUE_SIZE)
         self.cam_thread = CameraThread(self.frame_queue)
-        # 外部コールバックで最新フレームを更新し、録画中なら録画用キューにも投入
+        # 外部コールバックで最新フレームを更新し、録画中なら画像も保存
         self.cam_thread.external_callback = self.update_latest_frame
         self.cam_thread.start()
+        # 録画時の保存先フォルダ、連番用カウンタを初期化
+        self.recording_folder = None
+        self.frame_counter = 0
 
     def update_latest_frame(self, frame_np):
         try:
-            # 切り抜きパラメータが設定されていれば、画像をクロップする
+            # 切り抜きパラメータが設定されていれば画像をクロップ
             if g_value.img_trim_width > 0 and g_value.img_trim_height > 0:
                 x = g_value.img_trim_offset_x
                 y = g_value.img_trim_offset_y
@@ -214,47 +227,36 @@ class FrameStreamer:
             else:
                 cropped_frame_np = frame_np
 
-            # PIL 形式に変換して最新フレームとして保持
+            # PIL形式に変換して最新フレームとして保持
             pil_image = Image.fromarray(cv2.cvtColor(cropped_frame_np, cv2.COLOR_BGR2RGB))
             self.latest_frame = pil_image.copy()
 
-            # 録画中であれば、切り抜かれたフレームを録画用キューに投入
-            if self.recording:
-                try:
-                    self.recording_queue.put_nowait(cropped_frame_np)
-                except queue.Full:
-                    pass
+            # 録画中なら画像を保存
+            if self.recording and self.recording_folder is not None:
+                filename = f"frame_{self.frame_counter:04d}.jpg"
+                full_path = os.path.join(self.recording_folder, filename)
+                pil_image.save(full_path)
+                self.frame_counter += 1
         except Exception as e:
             print("フレーム変換エラー:", e)
 
     def start_recording(self):
         if not self.recording:
-            frame_np = None
-            start_time = time.time()
-            while frame_np is None and time.time() - start_time < 3:
-                try:
-                    frame_np = self.frame_queue.get_nowait()
-                except queue.Empty:
-                    time.sleep(0.05)
-            if frame_np is not None:
-                h, w, _ = frame_np.shape
-            else:
-                print("フレームが取得できなかったため、デフォルトサイズを使用します。")
-                w, h = FRAME_RESOLUTION_W, FRAME_RESOLUTION_H
-            # タイムスタンプを取得
-            base = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            if self.save_filename:
-                filename = f"{base}_{self.save_filename}.mp4"
-            else:
-                filename = f"{base}.mp4"
-            file_path = os.path.join(self.save_location, filename)
-            self.recording_queue = queue.Queue(maxsize=FRAME_QUEUE_SIZE*2)
-            self.ffmpeg_process = create_mp4_process(w, h, file_path, bitrate=4000)
+            # 録画開始時の時刻を取得（save_filename があればそれを含める）
+            now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            folder_name = f"{now}_{self.save_filename}" if self.save_filename else now
+            folder_path = os.path.join(self.save_location, folder_name)
+            os.makedirs(folder_path, exist_ok=True)
+            self.recording_folder = folder_path
             self.recording = True
-            self.recording_file = file_path
-            print("Frame録画開始:", file_path)
-            self.writer_thread = FfmpegWriterThread(self.recording_queue, self.ffmpeg_process)
-            self.writer_thread.start()
+            self.frame_counter = 0  # カウンタ初期化
+
+            # 録画開始時に現在の設定をスナップショットとして保存
+            current_config = load_config()
+            snapshot_path = save_config_snapshot(current_config, self.save_location)
+            print("設定スナップショットを保存しました:", snapshot_path)
+
+            print("Frame録画開始:", folder_path)
             return True
         print("既に録画中です。")
         return False
@@ -262,19 +264,8 @@ class FrameStreamer:
     def stop_recording(self):
         if self.recording:
             self.recording = False
-            self.recording_queue.put(None)
-            if self.writer_thread:
-                self.writer_thread.join()
-                self.writer_thread = None
-            try:
-                if self.ffmpeg_process.stdin:
-                    self.ffmpeg_process.stdin.close()
-                self.ffmpeg_process.wait()
-            except Exception as e:
-                print("録画停止エラー:", e)
-            self.ffmpeg_process = None
-            print("Frame録画停止。ファイル:", self.recording_file)
-            self.recording_file = None
+            print("Frame録画停止。保存先:", self.recording_folder)
+            self.recording_folder = None
             return True
         print("録画していません。")
         return False
@@ -282,7 +273,7 @@ class FrameStreamer:
     def update_save_settings(self, save_location, save_filename):
         self.save_location = save_location
         self.save_filename = save_filename
-        print(f"保存設定更新: 保存先={self.save_location}, ファイル名={self.save_filename}")
+        print(f"保存設定更新: 保存先={self.save_location}, ファイル名のプレフィックス={self.save_filename}")
         return True
 
     def shutdown(self):

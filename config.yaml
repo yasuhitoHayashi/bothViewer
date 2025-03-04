@@ -1,0 +1,31 @@
+eventCam:
+  bias:
+    diff_on: 20
+    diff_off: 20
+  triggerIn: true
+
+frameCam:
+  exposure: "Once"
+  gain:
+    mode: "Manual"
+    value: 0
+
+recording:
+  save_location: "./recordings"
+  file_prefix: "record"
+
+bothViewHW:
+  eventCamHW:
+    resolution: [1280, 720]
+    pixel:
+      width: 4.86  # um
+      height: 4.86  # um
+
+  frameCamHW:
+    resolution: [1936, 1216]
+    pixel:
+      width: 3.45  # um
+      height: 3.45  # um
+    frame_shift:
+      width: 0
+      height: 0
