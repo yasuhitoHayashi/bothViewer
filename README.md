@@ -19,3 +19,7 @@ python launcher.py
 ```
 
 The event stream server starts on port `5001` and the frame stream server starts on port `5002`. After a short delay the `bothViewer.html` page is opened automatically in your default web browser.
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
