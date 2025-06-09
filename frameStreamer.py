@@ -444,6 +444,25 @@ def set_framerate():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# --- FrameRate モード切替用 API エンドポイント ---
+@app.route('/set_framerate_mode', methods=['POST'])
+def set_framerate_mode():
+    data = request.get_json()
+    mode = data.get('mode')
+    if mode not in ['Manual', 'Auto']:
+        return jsonify({"status": "error", "message": "Invalid mode specified. Use 'Manual' or 'Auto'."}), 400
+    try:
+        cam = frame_streamer_instance.cam_thread.cam
+        if cam is None:
+            return jsonify({"status": "error", "message": "カメラが初期化されていません。"}), 500
+
+        enable_manual = (mode == 'Manual')
+        cam.AcquisitionFrameRateEnable.set(enable_manual)
+        current_mode = 'Manual' if cam.AcquisitionFrameRateEnable.get() else 'Auto'
+        return jsonify({"status": "success", "message": f"Frame rate mode set to {current_mode}."})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 # --- WhiteBalance 設定用 API エンドポイント ---
 @app.route('/set_whitebalance', methods=['POST'])
 def set_whitebalance():
