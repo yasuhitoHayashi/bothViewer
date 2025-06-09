@@ -160,6 +160,10 @@ class CameraThread(threading.Thread):
                 cam.LineSource.set('ExposureActive')
                 cam.TriggerSource.set('Line0')
                 cam.LineInverter.set(True)
+                try:
+                    cam.AcquisitionFrameRateEnable.set(True)
+                except Exception:
+                    pass
                 print("トリガアウト設定完了")
                 frame_sensor_w, frame_sensor_h = g_calc.get_cencer_size(
                     (FRAME_RESOLUTION_W, FRAME_RESOLUTION_H),
