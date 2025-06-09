@@ -239,6 +239,13 @@
             </h2>
             <div id="collapseRecording" class="accordion-collapse collapse" aria-labelledby="headingRecording" data-bs-parent="#settingsAccordion">
               <div class="accordion-body">
+                <div class="mb-3">
+                  <label for="record_mode" class="form-label">Frame Save Mode</label>
+                  <select class="form-select" id="record_mode">
+                    <option value="mp4" selected>Video (mp4)</option>
+                    <option value="images">Images</option>
+                  </select>
+                </div>
                 <div class="d-grid gap-2">
                   <button class="btn btn-danger" onclick="startRecording()">Start Recording</button>
                   <button class="btn btn-danger" onclick="stopRecording()">Stop Recording</button>
@@ -478,9 +485,14 @@
     }
     
     function startRecording() {
+      var mode = document.getElementById("record_mode").value;
       Promise.all([
         fetch('http://127.0.0.1:5001/start_recording', { method: 'POST' }).then(res => res.json()),
-        fetch('http://127.0.0.1:5002/start_recording', { method: 'POST' }).then(res => res.json())
+        fetch('http://127.0.0.1:5002/start_recording', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: mode })
+        }).then(res => res.json())
       ])
       .then(results => {
         showToast("EVS: " + results[0].message + " | Frame: " + results[1].message);

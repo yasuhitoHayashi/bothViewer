@@ -69,10 +69,10 @@ g_value = GValue()
 #######################################
 # ffmpeg プロセス生成／破棄用関数
 #######################################
-def create_mp4_process(img_w: int, img_h: int, file_path: str, bitrate=2000) -> subprocess.Popen:
+def create_mp4_process(img_w: int, img_h: int, file_path: str, bitrate=2000, fps=10) -> subprocess.Popen:
     process = (
         ffmpeg
-        .input('pipe:', format='rawvideo', pix_fmt='bgr24', s=f"{img_w}x{img_h}", framerate=10)
+        .input('pipe:', format='rawvideo', pix_fmt='bgr24', s=f"{img_w}x{img_h}", framerate=fps)
         .output(file_path, pix_fmt='yuv420p', vcodec='h264', vsync='passthrough',
                 video_bitrate=f"{bitrate}k", loglevel='info')
         .run_async(pipe_stdin=True, overwrite_output=True)
@@ -108,6 +108,31 @@ class FfmpegWriterThread(threading.Thread):
             self.ffmpeg_process.wait()
         except Exception:
             pass
+
+#######################################
+# 画像書き込み専用スレッドクラス（sentinel 使用）
+#######################################
+class ImageWriterThread(threading.Thread):
+    def __init__(self, recording_queue: 'queue.Queue', folder_path: str):
+        super().__init__()
+        self.recording_queue = recording_queue
+        self.folder_path = folder_path
+        self.counter = 0
+
+    def run(self):
+        while True:
+            try:
+                frame_np = self.recording_queue.get(timeout=0.1)
+            except Exception:
+                continue
+            if frame_np is None:
+                break
+            file_name = os.path.join(self.folder_path, f"{self.counter:06d}.png")
+            try:
+                cv2.imwrite(file_name, frame_np)
+                self.counter += 1
+            except Exception as e:
+                print("画像保存エラー:", e)
 
 #######################################
 # カメラスレッド：vmbpy を用いてフレームを取得
@@ -208,6 +233,8 @@ class FrameStreamer:
         self.recording_queue = None
         self.ffmpeg_process = None
         self.ffmpeg_thread = None
+        self.image_thread = None
+        self.recording_mode = "mp4"
 
         # フレームカメラ用キュー
         self.frame_queue = queue.Queue(maxsize=FRAME_QUEUE_SIZE)
@@ -241,30 +268,46 @@ class FrameStreamer:
         except Exception as e:
             print("フレーム変換エラー:", e)
 
-    def start_recording(self):
+    def start_recording(self, mode: str = "mp4"):
         if not self.recording:
             now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             folder_name = f"{now}_{self.save_filename}" if self.save_filename else now
             folder_path = os.path.join(self.save_location, folder_name)
             os.makedirs(folder_path, exist_ok=True)
             self.recording_folder = folder_path
-            self.recording_file = os.path.join(folder_path, "recording.mp4")
+            self.recording_mode = mode
 
             current_config = load_config()
             snapshot_path = save_config_snapshot(current_config, self.save_location)
             print("設定スナップショットを保存しました:", snapshot_path)
 
             self.recording_queue = queue.Queue(maxsize=FRAME_QUEUE_SIZE)
-            self.ffmpeg_process = create_mp4_process(
-                g_value.img_trim_width if g_value.img_trim_width > 0 else FRAME_RESOLUTION_W,
-                g_value.img_trim_height if g_value.img_trim_height > 0 else FRAME_RESOLUTION_H,
-                self.recording_file,
-            )
-            self.ffmpeg_thread = FfmpegWriterThread(self.recording_queue, self.ffmpeg_process)
-            self.ffmpeg_thread.start()
+
+            if mode == "mp4":
+                self.recording_file = os.path.join(folder_path, "recording.mp4")
+                fps_val = 10
+                try:
+                    cam = self.cam_thread.cam
+                    if cam is not None:
+                        fps_val = cam.AcquisitionFrameRate.get()
+                except Exception:
+                    pass
+                self.ffmpeg_process = create_mp4_process(
+                    g_value.img_trim_width if g_value.img_trim_width > 0 else FRAME_RESOLUTION_W,
+                    g_value.img_trim_height if g_value.img_trim_height > 0 else FRAME_RESOLUTION_H,
+                    self.recording_file,
+                    fps=int(fps_val),
+                )
+                self.ffmpeg_thread = FfmpegWriterThread(self.recording_queue, self.ffmpeg_process)
+                self.ffmpeg_thread.start()
+                print("Frame録画開始:", self.recording_file)
+            else:
+                self.recording_file = None
+                self.image_thread = ImageWriterThread(self.recording_queue, folder_path)
+                self.image_thread.start()
+                print("Frame画像保存開始:", folder_path)
 
             self.recording = True
-            print("Frame録画開始:", self.recording_file)
             return True
         print("既に録画中です。")
         return False
@@ -274,14 +317,20 @@ class FrameStreamer:
             self.recording = False
             if self.recording_queue is not None:
                 self.recording_queue.put(None)
-            if self.ffmpeg_thread is not None:
-                self.ffmpeg_thread.join()
-                self.ffmpeg_thread = None
+            if self.recording_mode == "mp4":
+                if self.ffmpeg_thread is not None:
+                    self.ffmpeg_thread.join()
+                    self.ffmpeg_thread = None
+                self.ffmpeg_process = None
+                print("Frame録画停止。保存先:", self.recording_file)
+                self.recording_file = None
+            else:
+                if self.image_thread is not None:
+                    self.image_thread.join()
+                    self.image_thread = None
+                print("Frame画像保存停止。保存先:", self.recording_folder)
             self.recording_queue = None
-            self.ffmpeg_process = None
-            print("Frame録画停止。保存先:", self.recording_file)
             self.recording_folder = None
-            self.recording_file = None
             return True
         print("録画していません。")
         return False
@@ -333,7 +382,9 @@ def set_save():
 
 @app.route('/start_recording', methods=['POST'])
 def start_recording():
-    success = frame_streamer_instance.start_recording()
+    data = request.get_json() or {}
+    mode = data.get('mode', 'mp4')
+    success = frame_streamer_instance.start_recording(mode)
     return jsonify({"status": "success" if success else "error", "message": "録画開始。"})
 
 @app.route('/stop_recording', methods=['POST'])
