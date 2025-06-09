@@ -160,8 +160,8 @@ class CameraThread(threading.Thread):
                 cam.LineSource.set('ExposureActive')
                 cam.TriggerSource.set('Line0')
                 cam.LineInverter.set(True)
-                cam.AcquisitionFrameRateEnable.set(True)
-                cam.AcquisitionFrameRate.set(0.1)
+                # 初期状態ではフレームレート制御を無効化しておく
+                cam.AcquisitionFrameRateEnable.set(False)
                 print("トリガアウト設定完了")
                 frame_sensor_w, frame_sensor_h = g_calc.get_cencer_size(
                     (FRAME_RESOLUTION_W, FRAME_RESOLUTION_H),
@@ -221,6 +221,22 @@ class CameraThread(threading.Thread):
 
     def stop(self):
         self.running = False
+
+    def set_framerate(self, fps: float):
+        """Stop streaming, set manual framerate, then restart."""
+        if self.cam is None:
+            return False, "Camera not initialized"
+        try:
+            # 一旦ストリーミングを停止
+            self.cam.stop_streaming()
+            # マニュアルモードにしてFPSを設定
+            self.cam.AcquisitionFrameRateEnable.set(True)
+            self.cam.AcquisitionFrameRate.set(float(fps))
+            # ストリーミング再開
+            self.cam.start_streaming(self.frame_callback)
+            return True, self.cam.AcquisitionFrameRate.get()
+        except Exception as e:
+            return False, str(e)
 
 #######################################
 # FrameStreamer クラス
@@ -484,15 +500,11 @@ def set_framerate():
     if fps is None:
         return jsonify({"status": "error", "message": "fps not provided."}), 400
     try:
-        cam = frame_streamer_instance.cam_thread.cam
-        if cam is None:
-            return jsonify({"status": "error", "message": "カメラが初期化されていません。"}), 500
-        try:
-            cam.AcquisitionFrameRate.set(float(fps))
-        except (AttributeError, VmbFeatureError):
-            return jsonify({"status": "error", "message": "Frame rate not supported"}), 500
-        current_fps = cam.AcquisitionFrameRate.get()
-        return jsonify({"status": "success", "fps": current_fps})
+        cam_thread = frame_streamer_instance.cam_thread
+        success, result = cam_thread.set_framerate(float(fps))
+        if not success:
+            return jsonify({"status": "error", "message": result}), 500
+        return jsonify({"status": "success", "fps": result})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
