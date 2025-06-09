@@ -179,7 +179,11 @@
             </h2>
             <div id="collapseFps" class="accordion-collapse collapse" aria-labelledby="headingFps" data-bs-parent="#settingsAccordion">
               <div class="accordion-body">
-                <div class="input-group">
+                <div class="d-grid gap-2">
+                  <button class="btn btn-secondary" onclick="setFramerateMode('Manual')">Manual</button>
+                  <button class="btn btn-secondary" onclick="setFramerateMode('Auto')">Auto</button>
+                </div>
+                <div class="input-group mt-2">
                   <input type="number" id="fps_manual_value" class="form-control" placeholder="FPS Value">
                   <button class="btn btn-secondary" onclick="setFramerate()">Set Frame Rate</button>
                 </div>
@@ -420,6 +424,20 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ mode: 'Manual', value: manual_value })
+      })
+      .then(response => response.json())
+      .then(data => {
+        showToast("Frame: " + data.message);
+        updateExposureManualField();
+      })
+      .catch(err => console.error(err));
+    }
+
+    function setFramerateMode(mode) {
+      fetch('http://127.0.0.1:5002/set_framerate_mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: mode })
       })
       .then(response => response.json())
       .then(data => {
