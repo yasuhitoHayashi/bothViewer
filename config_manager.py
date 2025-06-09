@@ -4,11 +4,11 @@
 CopyPolicy: 
     Released under the terms of the LGPLv2.1 or later.
 """
-import yaml
 import os
+import yaml
 from datetime import datetime
 
-CONFIG_FILE = "config.yaml"
+CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.yaml")
 
 def load_config():
     if not os.path.exists(CONFIG_FILE):
