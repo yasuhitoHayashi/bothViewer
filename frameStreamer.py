@@ -160,10 +160,8 @@ class CameraThread(threading.Thread):
                 cam.LineSource.set('ExposureActive')
                 cam.TriggerSource.set('Line0')
                 cam.LineInverter.set(True)
-                try:
-                    cam.AcquisitionFrameRateEnable.set(True)
-                except Exception:
-                    pass
+                cam.AcquisitionFrameRateEnable.set(True)
+                cam.AcquisitionFrameRate.set(0.1)
                 print("トリガアウト設定完了")
                 frame_sensor_w, frame_sensor_h = g_calc.get_cencer_size(
                     (FRAME_RESOLUTION_W, FRAME_RESOLUTION_H),
@@ -490,7 +488,6 @@ def set_framerate():
         if cam is None:
             return jsonify({"status": "error", "message": "カメラが初期化されていません。"}), 500
         try:
-            cam.AcquisitionFrameRateEnable.set(True)
             cam.AcquisitionFrameRate.set(float(fps))
         except (AttributeError, VmbFeatureError):
             return jsonify({"status": "error", "message": "Frame rate not supported"}), 500
