@@ -69,10 +69,10 @@ g_value = GValue()
 #######################################
 # ffmpeg プロセス生成／破棄用関数
 #######################################
-def create_mp4_process(img_w: int, img_h: int, file_path: str, bitrate=4000) -> subprocess.Popen:
+def create_mp4_process(img_w: int, img_h: int, file_path: str, bitrate=2000) -> subprocess.Popen:
     process = (
         ffmpeg
-        .input('pipe:', format='rawvideo', pix_fmt='bgr24', s=f"{img_w}x{img_h}", framerate=30)
+        .input('pipe:', format='rawvideo', pix_fmt='bgr24', s=f"{img_w}x{img_h}", framerate=10)
         .output(file_path, pix_fmt='yuv420p', vcodec='h264', vsync='passthrough',
                 video_bitrate=f"{bitrate}k", loglevel='info')
         .run_async(pipe_stdin=True, overwrite_output=True)
