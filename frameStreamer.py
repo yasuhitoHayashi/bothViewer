@@ -204,6 +204,9 @@ class FrameStreamer:
         self.latest_frame = None  # 最新フレーム（PIL Image）
         self.recording = False
         self.recording_file = None
+        self.recording_queue = None
+        self.ffmpeg_process = None
+        self.ffmpeg_thread = None
 
         # フレームカメラ用キュー
         self.frame_queue = queue.Queue(maxsize=FRAME_QUEUE_SIZE)
@@ -211,9 +214,7 @@ class FrameStreamer:
         # 外部コールバックで最新フレームを更新し、録画中なら画像も保存
         self.cam_thread.external_callback = self.update_latest_frame
         self.cam_thread.start()
-        # 録画時の保存先フォルダ、連番用カウンタを初期化
         self.recording_folder = None
-        self.frame_counter = 0
 
     def update_latest_frame(self, frame_np):
         try:
@@ -231,32 +232,38 @@ class FrameStreamer:
             pil_image = Image.fromarray(cv2.cvtColor(cropped_frame_np, cv2.COLOR_BGR2RGB))
             self.latest_frame = pil_image.copy()
 
-            # 録画中なら画像を保存
-            if self.recording and self.recording_folder is not None:
-                filename = f"frame_{self.frame_counter:04d}.jpg"
-                full_path = os.path.join(self.recording_folder, filename)
-                pil_image.save(full_path)
-                self.frame_counter += 1
+            if self.recording and self.recording_queue is not None:
+                try:
+                    self.recording_queue.put_nowait(cropped_frame_np.copy())
+                except queue.Full:
+                    pass
         except Exception as e:
             print("フレーム変換エラー:", e)
 
     def start_recording(self):
         if not self.recording:
-            # 録画開始時の時刻を取得（save_filename があればそれを含める）
             now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             folder_name = f"{now}_{self.save_filename}" if self.save_filename else now
             folder_path = os.path.join(self.save_location, folder_name)
             os.makedirs(folder_path, exist_ok=True)
             self.recording_folder = folder_path
-            self.recording = True
-            self.frame_counter = 0  # カウンタ初期化
+            self.recording_file = os.path.join(folder_path, "recording.mp4")
 
-            # 録画開始時に現在の設定をスナップショットとして保存
             current_config = load_config()
             snapshot_path = save_config_snapshot(current_config, self.save_location)
             print("設定スナップショットを保存しました:", snapshot_path)
 
-            print("Frame録画開始:", folder_path)
+            self.recording_queue = queue.Queue(maxsize=FRAME_QUEUE_SIZE)
+            self.ffmpeg_process = create_mp4_process(
+                g_value.img_trim_width if g_value.img_trim_width > 0 else FRAME_RESOLUTION_W,
+                g_value.img_trim_height if g_value.img_trim_height > 0 else FRAME_RESOLUTION_H,
+                self.recording_file,
+            )
+            self.ffmpeg_thread = FfmpegWriterThread(self.recording_queue, self.ffmpeg_process)
+            self.ffmpeg_thread.start()
+
+            self.recording = True
+            print("Frame録画開始:", self.recording_file)
             return True
         print("既に録画中です。")
         return False
@@ -264,8 +271,16 @@ class FrameStreamer:
     def stop_recording(self):
         if self.recording:
             self.recording = False
-            print("Frame録画停止。保存先:", self.recording_folder)
+            if self.recording_queue is not None:
+                self.recording_queue.put(None)
+            if self.ffmpeg_thread is not None:
+                self.ffmpeg_thread.join()
+                self.ffmpeg_thread = None
+            self.recording_queue = None
+            self.ffmpeg_process = None
+            print("Frame録画停止。保存先:", self.recording_file)
             self.recording_folder = None
+            self.recording_file = None
             return True
         print("録画していません。")
         return False
