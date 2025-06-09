@@ -1,8 +1,7 @@
 """
 @author: HAYASHI Yasuhito (dangom_ya)
 
-CopyPolicy: 
-    Released under the terms of the LGPLv2.1 or later.
+Licensed under the Apache License, Version 2.0.
 """
 import os
 import yaml
