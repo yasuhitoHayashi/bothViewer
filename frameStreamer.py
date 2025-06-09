@@ -18,6 +18,7 @@ from PIL import Image
 import ffmpeg  # pip install ffmpeg-python
 import subprocess
 from flask import Flask, Response, request, jsonify
+from vmbpy import VmbFeatureError
 import global_calc as g_calc
 from config_manager import load_config, save_config, save_config_snapshot
 
@@ -422,6 +423,27 @@ def set_gain():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# --- FrameRate 設定用 API エンドポイント ---
+@app.route('/set_framerate', methods=['POST'])
+def set_framerate():
+    data = request.get_json()
+    fps = data.get('fps')
+    if fps is None:
+        return jsonify({"status": "error", "message": "fps not provided."}), 400
+    try:
+        cam = frame_streamer_instance.cam_thread.cam
+        if cam is None:
+            return jsonify({"status": "error", "message": "カメラが初期化されていません。"}), 500
+        try:
+            cam.AcquisitionFrameRateEnable.set(True)
+            cam.AcquisitionFrameRate.set(float(fps))
+        except (AttributeError, VmbFeatureError):
+            return jsonify({"status": "error", "message": "Frame rate not supported"}), 500
+        current_fps = cam.AcquisitionFrameRate.get()
+        return jsonify({"status": "success", "fps": current_fps})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 # --- WhiteBalance 設定用 API エンドポイント ---
 @app.route('/set_whitebalance', methods=['POST'])
 def set_whitebalance():
@@ -447,10 +469,12 @@ def get_settings():
             return jsonify({"status": "error", "message": "カメラが初期化されていません。"}), 500
         exposure_value = cam.ExposureTime.get()
         gain_value = cam.Gain.get()
+        fps_value = cam.AcquisitionFrameRate.get()
         return jsonify({
             "status": "success",
             "exposure": exposure_value,
-            "gain": gain_value
+            "gain": gain_value,
+            "fps": fps_value
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500

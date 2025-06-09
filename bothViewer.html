@@ -170,6 +170,22 @@
               </div>
             </div>
           </div>
+          <!-- Frame Rate Settings -->
+          <div class="accordion-item mb-2">
+            <h2 class="accordion-header" id="headingFps">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseFps" aria-expanded="false" aria-controls="collapseFps">
+                Frame Rate Settings
+              </button>
+            </h2>
+            <div id="collapseFps" class="accordion-collapse collapse" aria-labelledby="headingFps" data-bs-parent="#settingsAccordion">
+              <div class="accordion-body">
+                <div class="input-group">
+                  <input type="number" id="fps_manual_value" class="form-control" placeholder="FPS Value">
+                  <button class="btn btn-secondary" onclick="setFramerate()">Set Frame Rate</button>
+                </div>
+              </div>
+            </div>
+          </div>
           <!-- White Balance Settings -->
           <div class="accordion-item mb-2">
             <h2 class="accordion-header" id="headingWB">
@@ -282,7 +298,7 @@
       setTimeout(() => { container.removeChild(toast); }, 1100);
     }
     
-    // Exposure と Gain の manual 値更新
+    // Exposure, Gain, FPS の manual 値更新
     function updateExposureManualField() {
       fetch('http://127.0.0.1:5002/get_settings')
         .then(response => response.json())
@@ -290,6 +306,9 @@
           if (data.status === "success") {
             document.getElementById("exposure_manual_value").value = data.exposure;
             document.getElementById("gain_manual_value").value = data.gain;
+            if (document.getElementById("fps_manual_value")) {
+              document.getElementById("fps_manual_value").value = data.fps;
+            }
           }
         })
         .catch(err => console.error(err));
@@ -405,6 +424,25 @@
       .then(response => response.json())
       .then(data => {
         showToast("Frame: " + data.message);
+        updateExposureManualField();
+      })
+      .catch(err => console.error(err));
+    }
+
+    function setFramerate() {
+      var fps = document.getElementById("fps_manual_value").value;
+      fetch('http://127.0.0.1:5002/set_framerate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fps: fps })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.status === "success") {
+          showToast("Frame: Frame rate set to " + data.fps);
+        } else {
+          showToast("Frame: " + data.message);
+        }
         updateExposureManualField();
       })
       .catch(err => console.error(err));
