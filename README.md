@@ -27,6 +27,10 @@ cached bytes to clients. This reduces repetitive conversions and lowers CPU
 usage, which is especially helpful on resource constrained devices such as the
 Raspberry Pi.
 
+You can further reduce CPU usage by lowering the display scale factor. Pass
+`--display-factor 0.3` (for example) when starting `frameStreamer.py` to
+downscale frames before encoding.
+
 ## License
 
 This project is licensed under the [Apache License 2.0](LICENSE).

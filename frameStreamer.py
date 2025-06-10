@@ -242,6 +242,7 @@ class CameraThread(threading.Thread):
 class FrameStreamer:
     def __init__(self, save_location, display_factor=0.5):
         self.save_location = save_location
+        self.display_factor = display_factor
         self.save_filename = ""  # ファイル名設定
         self.latest_frame = None  # 最新フレーム（PIL Image）
         self.latest_frame_jpeg = None  # JPEG エンコード済みフレーム
@@ -273,13 +274,23 @@ class FrameStreamer:
             else:
                 cropped_frame_np = frame_np
 
+            display_np = cropped_frame_np
+            if self.display_factor != 1.0:
+                display_np = cv2.resize(
+                    cropped_frame_np,
+                    None,
+                    fx=self.display_factor,
+                    fy=self.display_factor,
+                    interpolation=cv2.INTER_AREA,
+                )
+
             # JPEG エンコードを一度だけ行い、結果のバイト列を保持
-            ret, jpeg_buf = cv2.imencode('.jpg', cropped_frame_np)
+            ret, jpeg_buf = cv2.imencode('.jpg', display_np)
             if ret:
                 self.latest_frame_jpeg = jpeg_buf.tobytes()
 
             # 必要に応じて PIL 形式も保持（互換性維持用）
-            pil_image = Image.fromarray(cv2.cvtColor(cropped_frame_np, cv2.COLOR_BGR2RGB))
+            pil_image = Image.fromarray(cv2.cvtColor(display_np, cv2.COLOR_BGR2RGB))
             self.latest_frame = pil_image.copy()
 
             if self.recording and self.recording_queue is not None:
@@ -578,10 +589,12 @@ if __name__ == "__main__":
                         help="Flask サーバーのポート番号")
     parser.add_argument('--input-event-file', dest='input_event_file', default="",
                         help="入力イベントファイルのパス（フレームカメラの場合は無視）")
+    parser.add_argument('--display-factor', dest='display_factor', type=float, default=0.5,
+                        help="表示用に縮小する倍率 (0-1). 値を小さくするとCPU負荷を減らせます")
     args = parser.parse_args()
 
     # グローバル変数に FrameStreamer インスタンスをセット
-    frame_streamer_instance = FrameStreamer(args.save_location)
+    frame_streamer_instance = FrameStreamer(args.save_location, display_factor=args.display_factor)
     # Flask サーバーを別スレッドで起動
     flask_thread = threading.Thread(target=run_flask_server, args=(args.port,), daemon=True)
     flask_thread.start()
