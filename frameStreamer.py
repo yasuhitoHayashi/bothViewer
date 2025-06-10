@@ -7,7 +7,6 @@ import argparse
 import os
 import threading
 import time
-import io
 import signal
 from datetime import datetime
 
@@ -245,6 +244,7 @@ class FrameStreamer:
         self.save_location = save_location
         self.save_filename = ""  # ファイル名設定
         self.latest_frame = None  # 最新フレーム（PIL Image）
+        self.latest_frame_jpeg = None  # JPEG エンコード済みフレーム
         self.recording = False
         self.recording_file = None
         self.recording_queue = None
@@ -273,7 +273,12 @@ class FrameStreamer:
             else:
                 cropped_frame_np = frame_np
 
-            # PIL形式に変換して最新フレームとして保持
+            # JPEG エンコードを一度だけ行い、結果のバイト列を保持
+            ret, jpeg_buf = cv2.imencode('.jpg', cropped_frame_np)
+            if ret:
+                self.latest_frame_jpeg = jpeg_buf.tobytes()
+
+            # 必要に応じて PIL 形式も保持（互換性維持用）
             pil_image = Image.fromarray(cv2.cvtColor(cropped_frame_np, cv2.COLOR_BGR2RGB))
             self.latest_frame = pil_image.copy()
 
@@ -378,10 +383,8 @@ def after_request(response):
 def video_feed():
     def generate():
         while True:
-            if frame_streamer_instance and frame_streamer_instance.latest_frame:
-                buf = io.BytesIO()
-                frame_streamer_instance.latest_frame.save(buf, format='JPEG')
-                frame_data = buf.getvalue()
+            if frame_streamer_instance and frame_streamer_instance.latest_frame_jpeg:
+                frame_data = frame_streamer_instance.latest_frame_jpeg
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
             time.sleep(0.05)
