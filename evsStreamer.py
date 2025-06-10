@@ -7,7 +7,6 @@ import argparse
 import os
 import threading
 import time
-import io
 import signal
 from datetime import datetime
 
@@ -59,8 +58,9 @@ class EVSStreamer:
         self.width = int(self.orig_width * self.display_factor)
         self.height = int(self.orig_height * self.display_factor)
 
-        # 最新フレーム保持（オリジナルサイズの PIL Image）
-        self.latest_frame = None
+        # 最新フレーム保持
+        self.latest_frame = None  # PIL Image 形式（互換用）
+        self.latest_frame_jpeg = None  # JPEG エンコード済みバイト列
 
         # 録画状態
         self.recording = False
@@ -86,10 +86,31 @@ class EVSStreamer:
         self.trigger_in = False
 
     def on_cd_frame_cb(self, ts, cd_frame):
-        # BGR→RGB 変換して PIL 画像に変換し、最新フレームとして保持
-        pil_image = Image.fromarray(cv2.cvtColor(cd_frame, cv2.COLOR_BGR2RGB))
-        pil_image = pil_image.transpose(Image.FLIP_LEFT_RIGHT)
-        self.latest_frame = pil_image.copy()
+        """イベントフレーム生成時のコールバック"""
+        try:
+            # 左右反転
+            frame_np = cv2.flip(cd_frame, 1)
+
+            # 表示縮小
+            if self.display_factor != 1.0:
+                frame_np = cv2.resize(
+                    frame_np,
+                    None,
+                    fx=self.display_factor,
+                    fy=self.display_factor,
+                    interpolation=cv2.INTER_AREA,
+                )
+
+            # JPEG エンコードを一度だけ実施
+            ret, jpeg_buf = cv2.imencode('.jpg', frame_np)
+            if ret:
+                self.latest_frame_jpeg = jpeg_buf.tobytes()
+
+            # 必要に応じて PIL 形式も保持（互換性維持用）
+            pil_image = Image.fromarray(cv2.cvtColor(frame_np, cv2.COLOR_BGR2RGB))
+            self.latest_frame = pil_image.copy()
+        except Exception as e:
+            print("EVS フレーム変換エラー:", e)
 
     def event_loop(self):
         for evs in self.mv_iterator:
@@ -198,10 +219,8 @@ def after_request(response):
 def video_feed():
     def generate():
         while True:
-            if evs_streamer_instance and evs_streamer_instance.latest_frame:
-                buf = io.BytesIO()
-                evs_streamer_instance.latest_frame.save(buf, format='JPEG')
-                frame_data = buf.getvalue()
+            if evs_streamer_instance and evs_streamer_instance.latest_frame_jpeg:
+                frame_data = evs_streamer_instance.latest_frame_jpeg
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
             time.sleep(0.05)
@@ -262,10 +281,16 @@ if __name__ == "__main__":
                         help="録画ファイルの保存先ディレクトリ")
     parser.add_argument('--port', dest='port', type=int, default=5001,
                         help="Flask サーバーのポート番号")
+    parser.add_argument('--display-factor', dest='display_factor', type=float, default=0.5,
+                        help="表示用に縮小する倍率 (0-1). 値を小さくするとCPU負荷を減らせます")
     args = parser.parse_args()
 
     # グローバル変数に EVSStreamer インスタンスをセット
-    evs_streamer_instance = EVSStreamer(args.event_file_path, args.save_location)
+    evs_streamer_instance = EVSStreamer(
+        args.event_file_path,
+        args.save_location,
+        display_factor=args.display_factor,
+    )
     evs_streamer_instance.start_event_loop()
 
     # Flask サーバーを別スレッドで起動
