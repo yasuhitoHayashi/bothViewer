@@ -21,12 +21,6 @@ python launcher.py
 The event stream server starts on port `5001` and the frame stream server starts on port `5002`. After a short delay the `bothViewer.html` page is opened automatically in your default web browser.
 
 ## Performance
-
-Both streamers encode frames to JPEG only once and then share the cached
-bytes with connected clients. This avoids repeated conversions and lowers CPU
-usage, which is especially helpful on resource constrained devices such as the
-Raspberry Pi.
-
 You can further reduce CPU usage by lowering the display scale factor. Pass
 `--display-factor 0.3` (for example) when starting `frameStreamer.py` or
 `evsStreamer.py` to downscale frames before encoding.
