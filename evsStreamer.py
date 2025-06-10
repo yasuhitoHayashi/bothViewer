@@ -281,7 +281,7 @@ if __name__ == "__main__":
                         help="録画ファイルの保存先ディレクトリ")
     parser.add_argument('--port', dest='port', type=int, default=5001,
                         help="Flask サーバーのポート番号")
-    parser.add_argument('--display-factor', dest='display_factor', type=float, default=0.5,
+    parser.add_argument('--display-factor', dest='display_factor', type=float, default=0.2,
                         help="表示用に縮小する倍率 (0-1). 値を小さくするとCPU負荷を減らせます")
     args = parser.parse_args()
 

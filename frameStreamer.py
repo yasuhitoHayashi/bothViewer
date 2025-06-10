@@ -589,7 +589,7 @@ if __name__ == "__main__":
                         help="Flask サーバーのポート番号")
     parser.add_argument('--input-event-file', dest='input_event_file', default="",
                         help="入力イベントファイルのパス（フレームカメラの場合は無視）")
-    parser.add_argument('--display-factor', dest='display_factor', type=float, default=0.5,
+    parser.add_argument('--display-factor', dest='display_factor', type=float, default=0.2,
                         help="表示用に縮小する倍率 (0-1). 値を小さくするとCPU負荷を減らせます")
     args = parser.parse_args()
 
