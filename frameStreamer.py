@@ -46,6 +46,9 @@ EVENT_PIXCEL_H = float(event_pixel["height"])
 
 FRAME_QUEUE_SIZE = 10
 
+FRAME_PIXEL_FORMAT = config_data.get("frameCam", {}).get("pixel_format", "RGB8")
+SUPPORTED_PIXEL_FORMATS = ["RGB8", "Mono8", "YCbCr411_8_CbYYCrYY"]
+
 adjust_view = config_data["bothViewHW"]["frameCamHW"]["frame_shift"]
 ADJUST_VIEW_W = int(adjust_view["width"])
 ADJUST_VIEW_H = int(adjust_view["height"])
@@ -136,12 +139,13 @@ class ImageWriterThread(threading.Thread):
 # カメラスレッド：vmbpy を用いてフレームを取得
 #######################################
 class CameraThread(threading.Thread):
-    def __init__(self, frame_queue: 'queue.Queue'):
+    def __init__(self, frame_queue: 'queue.Queue', pixel_format: str = "RGB8"):
         super().__init__()
         self.frame_queue = frame_queue
         self.running = True
         self.external_callback = None
         self.cam = None  # 追加：外部アクセス用にカメラインスタンスを保持
+        self.pixel_format = pixel_format
 
     def run(self):
         from vmbpy import VmbSystem, Frame, FrameStatus
@@ -158,6 +162,11 @@ class CameraThread(threading.Thread):
                 cam.LineSource.set('ExposureActive')
                 cam.TriggerSource.set('Line0')
                 cam.LineInverter.set(True)
+                try:
+                    cam.PixelFormat.set(self.pixel_format)
+                    print(f"PixelFormat set to {self.pixel_format}")
+                except Exception as e:
+                    print(f"Failed to set PixelFormat to {self.pixel_format}: {e}")
                 # 初期状態ではフレームレート制御を無効化しておく
                 cam.AcquisitionFrameRateEnable.set(False)
                 print("トリガアウト設定完了")
@@ -195,6 +204,8 @@ class CameraThread(threading.Thread):
         if frame.get_status() == FrameStatus.Complete:
             try:
                 frame_np = frame.as_opencv_image()
+                if frame_np.ndim == 2:
+                    frame_np = cv2.cvtColor(frame_np, cv2.COLOR_GRAY2BGR)
             except ValueError as e:
                 if "Rgb8" in str(e):
                     h = frame.get_height()
@@ -236,11 +247,24 @@ class CameraThread(threading.Thread):
         except Exception as e:
             return False, str(e)
 
+    def set_pixel_format(self, pixfmt: str):
+        """Stop streaming, set pixel format, then restart."""
+        if self.cam is None:
+            return False, "Camera not initialized"
+        try:
+            self.cam.stop_streaming()
+            self.cam.PixelFormat.set(pixfmt)
+            self.pixel_format = pixfmt
+            self.cam.start_streaming(self.frame_callback)
+            return True, self.cam.PixelFormat.get()
+        except Exception as e:
+            return False, str(e)
+
 #######################################
 # FrameStreamer クラス
 #######################################
 class FrameStreamer:
-    def __init__(self, save_location, display_factor=0.5):
+    def __init__(self, save_location, display_factor=0.5, pixel_format=FRAME_PIXEL_FORMAT):
         self.save_location = save_location
         self.display_factor = display_factor
         self.save_filename = ""  # ファイル名設定
@@ -256,7 +280,7 @@ class FrameStreamer:
 
         # フレームカメラ用キュー
         self.frame_queue = queue.Queue(maxsize=FRAME_QUEUE_SIZE)
-        self.cam_thread = CameraThread(self.frame_queue)
+        self.cam_thread = CameraThread(self.frame_queue, pixel_format=pixel_format)
         # 外部コールバックで最新フレームを更新し、録画中なら画像も保存
         self.cam_thread.external_callback = self.update_latest_frame
         self.cam_thread.start()
@@ -556,6 +580,24 @@ def set_whitebalance():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# --- PixelFormat 設定用 API エンドポイント ---
+@app.route('/set_pixel_format', methods=['POST'])
+def set_pixel_format():
+    data = request.get_json()
+    pixfmt = data.get('format')
+    if pixfmt is None:
+        return jsonify({"status": "error", "message": "format not provided."}), 400
+    if pixfmt not in SUPPORTED_PIXEL_FORMATS:
+        return jsonify({"status": "error", "message": "Unsupported pixel format."}), 400
+    try:
+        cam_thread = frame_streamer_instance.cam_thread
+        success, result = cam_thread.set_pixel_format(str(pixfmt))
+        if not success:
+            return jsonify({"status": "error", "message": result}), 500
+        return jsonify({"status": "success", "pixel_format": result})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 # --- 現在の Exposure, Gain 値を返す API エンドポイント ---
 @app.route('/get_settings', methods=['GET'])
 def get_settings():
@@ -566,11 +608,13 @@ def get_settings():
         exposure_value = cam.ExposureTime.get()
         gain_value = cam.Gain.get()
         fps_value = cam.AcquisitionFrameRate.get()
+        pixel_format = cam.PixelFormat.get()
         return jsonify({
             "status": "success",
             "exposure": exposure_value,
             "gain": gain_value,
-            "fps": fps_value
+            "fps": fps_value,
+            "pixel_format": pixel_format
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -591,10 +635,16 @@ if __name__ == "__main__":
                         help="入力イベントファイルのパス（フレームカメラの場合は無視）")
     parser.add_argument('--display-factor', dest='display_factor', type=float, default=0.2,
                         help="表示用に縮小する倍率 (0-1). 値を小さくするとCPU負荷を減らせます")
+    parser.add_argument('--pixel-format', dest='pixel_format', default=FRAME_PIXEL_FORMAT,
+                        help="カメラのPixelFormatを指定します")
     args = parser.parse_args()
 
     # グローバル変数に FrameStreamer インスタンスをセット
-    frame_streamer_instance = FrameStreamer(args.save_location, display_factor=args.display_factor)
+    frame_streamer_instance = FrameStreamer(
+        args.save_location,
+        display_factor=args.display_factor,
+        pixel_format=args.pixel_format,
+    )
     # Flask サーバーを別スレッドで起動
     flask_thread = threading.Thread(target=run_flask_server, args=(args.port,), daemon=True)
     flask_thread.start()

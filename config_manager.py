@@ -19,7 +19,8 @@ def load_config():
             },
             "frameCam": {
                 "exposure": "Once",
-                "gain": {"mode": "Manual", "value": 0}
+                "gain": {"mode": "Manual", "value": 0},
+                "pixel_format": "RGB8"
             },
             "recording": {
                 "save_location": "./recordings",
