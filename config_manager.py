@@ -36,6 +36,18 @@ def resolve_recording_directory(
     return os.path.abspath(os.path.expanduser(value))
 
 
+def normalize_save_settings(save_location, save_filename):
+    """Validate GUI save settings and ensure the selected directory exists."""
+    if not isinstance(save_location, str) or not save_location.strip():
+        raise ValueError("保存先フォルダを指定してください。")
+    location = os.path.abspath(os.path.expanduser(save_location.strip()))
+    filename = (save_filename or "").strip()
+    if os.path.basename(filename) != filename or filename in {".", ".."}:
+        raise ValueError("ファイル名にフォルダ区切りは使用できません。")
+    os.makedirs(location, exist_ok=True)
+    return location, filename
+
+
 def create_session_directory(save_location, session_id):
     """検証済みsession_idで共通の記録ディレクトリを作成する。"""
     if not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id):

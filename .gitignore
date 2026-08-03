@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+/records/
 2025-06-17_19-04-33.raw
 /2025-06-17_19-04-33
 2025-06-17_19-04-33_config_snapshot.yaml

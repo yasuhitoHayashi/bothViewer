@@ -2,6 +2,31 @@
 
 bothViewer provides a web-based control console for simultaneously viewing and recording data from an event camera and a frame camera. It runs two local Flask servers and opens a responsive, dependency-free HTML interface for monitoring both streams and changing camera settings.
 
+## Project layout
+
+- `launcher.py`: dependency check, shared recording-directory resolution, and process supervision
+- `evsStreamer.py`: EVS device lifecycle, RAW recording, and Trigger In monitoring
+- `frameStreamer.py`: frame-camera lifecycle, Bayer recording, and camera controls
+- `bothviewer/api/evs.py`: hardware-independent port 5001 HTTP API factory
+- `bothviewer/api/frame.py`: hardware-independent port 5002 HTTP API factory
+- `bothviewer/api/common.py`: API response helpers shared by both servers
+- `camera_geometry.py`: physical field-of-view and camera-ROI calculations
+- `preview_manager.py`: recording-priority latest-frame JPEG workers
+- `synchronization.py`: frame/trigger audit and `synchronization.csv` generation
+- `recording_catalog.py`: saved-session catalog, Bayer preview, and synchronized playback rendering
+- `config_manager.py`: configuration, save-path validation, and session-directory helpers
+- `bothViewer.html`: UI markup only
+- `static/bothViewer.css`, `static/bothViewer.js`: UI presentation and behavior
+- `tests/`: hardware-independent regression tests
+- `records/`: generated experiment data; created at launch and excluded from Git
+
+The root streamer scripts remain executable entry points for compatibility, but
+their Flask routes live under `bothviewer/api`. Each API receives a callable that
+returns the current streamer instance, so camera recovery can replace internal
+state without leaving the web layer with a stale reference. The API modules do
+not import VmbPy or OpenEB and can therefore be regression-tested without camera
+hardware.
+
 The live frame preview demosaics Bayer data with crop-phase correction; recorded PGM values remain untouched. The EVS preview uses a grayscale event palette: gray background, positive events white, and negative events black.
 
 ## Installation
@@ -106,6 +131,13 @@ In normal free-run mode, the GUI reads the camera's supported fps range and allo
 ## Bandwidth and recovery
 
 The frame-camera GUI provides Safe (100 MB/s), Standard (150 MB/s), and High (200 MB/s) transport presets. If three incomplete frames occur within five seconds, the application automatically steps down one preset and persists the safer value. Camera disconnects are retried with exponential backoff up to five seconds. Frame recording continues in the same image directory with a new `stream_epoch`; EVS recording starts a new RAW segment because appending safely across device reconnection is not guaranteed. The browser MJPEG views also reconnect automatically.
+
+Connection initialization and retry are active only while the capture tab is visible.
+The browser renews a short activity lease for both camera services; switching to
+saved data, hiding or closing the page, or losing the browser connection lets the
+lease expire and changes a disconnected camera to `retry_paused`. A healthy
+camera connection is left running, and retry resumes immediately when the
+capture tab becomes visible again.
 
 ## Performance
 

@@ -3,7 +3,8 @@ import tempfile
 import unittest
 
 from config_manager import (
-    platform_default_recording_directory, resolve_recording_directory,
+    normalize_save_settings, platform_default_recording_directory,
+    resolve_recording_directory,
 )
 
 
@@ -34,6 +35,19 @@ class RecordingDirectoryTests(unittest.TestCase):
             self.assertEqual(
                 resolve_recording_directory(explicit_directory),
                 os.path.abspath(explicit_directory))
+
+    def test_normalize_save_settings_creates_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            destination = os.path.join(root, "new", "records")
+            location, filename = normalize_save_settings(destination, "sample-01")
+            self.assertEqual(location, destination)
+            self.assertEqual(filename, "sample-01")
+            self.assertTrue(os.path.isdir(destination))
+
+    def test_normalize_save_settings_rejects_path_in_filename(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(ValueError):
+                normalize_save_settings(root, "nested/sample")
 
 
 if __name__ == "__main__":

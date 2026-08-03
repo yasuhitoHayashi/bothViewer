@@ -7,7 +7,6 @@ import argparse
 from collections import deque
 import csv
 import json
-import math
 import os
 import queue
 import signal
@@ -16,28 +15,16 @@ import time
 from datetime import datetime, timezone
 
 import cv2
-from flask import Flask, Response, request, jsonify
-
-import global_calc as g_calc
-from config_manager import create_session_directory, load_config, save_config, save_config_snapshot
-from preview_manager import LatestFramePreview, PREVIEW_PRESETS
-from recording_catalog import (
-    list_sessions, playback_manifest, render_event_overlay_png, render_event_window_jpeg,
-    render_preview_jpeg, session_detail,
+import camera_geometry as geometry
+from config_manager import (
+    create_session_directory, load_config, normalize_save_settings,
+    save_config, save_config_snapshot,
 )
+from preview_manager import LatestFramePreview, PREVIEW_PRESETS
+from bothviewer.api.frame import create_frame_app
 
 frame_streamer_instance = None
 
-
-def normalize_save_settings(save_location, save_filename):
-    if not isinstance(save_location, str) or not save_location.strip():
-        raise ValueError("保存先フォルダを指定してください。")
-    location = os.path.abspath(os.path.expanduser(save_location.strip()))
-    filename = (save_filename or "").strip()
-    if os.path.basename(filename) != filename or filename in {".", ".."}:
-        raise ValueError("ファイル名にフォルダ区切りは使用できません。")
-    os.makedirs(location, exist_ok=True)
-    return location, filename
 
 #######################################
 # YAML 設定ファイルからパラメータ読み込み
@@ -108,23 +95,23 @@ g_value = GValue()
 
 def calculate_evs_matching_frame_roi():
     """同じレンズ倍率を前提に、EVSセンサーと同じ物理視野のFrame ROIを返す。"""
-    frame_sensor = g_calc.get_cencer_size(
+    frame_sensor = geometry.get_sensor_size(
         (FRAME_RESOLUTION_W, FRAME_RESOLUTION_H),
         (FRAME_PIXCEL_W, FRAME_PIXCEL_H))
-    event_sensor = g_calc.get_cencer_size(
+    event_sensor = geometry.get_sensor_size(
         (EVENT_RESOLUTION_W, EVENT_RESOLUTION_H),
         (EVENT_PIXCEL_W, EVENT_PIXCEL_H))
-    trim_x, trim_y = g_calc.get_trim_pixel_size(
+    trim_x, trim_y = geometry.get_trim_pixel_size(
         (FRAME_RESOLUTION_W, FRAME_RESOLUTION_H),
         (EVENT_RESOLUTION_W, EVENT_RESOLUTION_H),
         frame_sensor,
         event_sensor)
     width = FRAME_RESOLUTION_W - trim_x * 2
     height = FRAME_RESOLUTION_H - trim_y * 2
-    (width, height), (trim_x, trim_y) = g_calc.get_adjusted_roi(
+    (width, height), (trim_x, trim_y) = geometry.get_adjusted_roi(
         (width, height), (trim_x, trim_y))
-    offset_x = int(trim_x - g_calc.get_adjusted_offset(ADJUST_VIEW_W))
-    offset_y = int(trim_y + g_calc.get_adjusted_offset(ADJUST_VIEW_H))
+    offset_x = int(trim_x - geometry.get_adjusted_offset(ADJUST_VIEW_W))
+    offset_y = int(trim_y + geometry.get_adjusted_offset(ADJUST_VIEW_H))
     return {
         "width": int(width),
         "height": int(height),
@@ -964,9 +951,10 @@ class FrameStreamer:
         self.successful_reconnections = 0
         self.connection_state = "connecting"
         self.camera_supervisor_running = True
+        self.capture_active_until = 0.0
+        self.camera_retry_wakeup = threading.Event()
 
         self.cam_thread = self.create_camera_thread(stream_epoch=0)
-        self.cam_thread.start()
         self.camera_supervisor_thread = threading.Thread(
             target=self.camera_supervisor_loop, daemon=True)
         self.camera_supervisor_thread.start()
@@ -1000,6 +988,16 @@ class FrameStreamer:
             })
             self.connection_file.flush()
 
+    def set_capture_active(self, active, lease_seconds=12.0):
+        """撮影画面が見えている間だけ接続試行を許可する。"""
+        self.capture_active_until = (
+            time.monotonic() + max(1.0, float(lease_seconds)) if active else 0.0)
+        self.camera_retry_wakeup.set()
+        return self.capture_retry_active()
+
+    def capture_retry_active(self):
+        return time.monotonic() < self.capture_active_until
+
     def camera_supervisor_loop(self):
         was_connected = False
         retry_delay = 1.0
@@ -1015,17 +1013,31 @@ class FrameStreamer:
                 was_connected = True
                 retry_delay = 1.0
             if not thread.is_alive():
+                previously_started = thread.ident is not None
                 if was_connected:
                     self.record_connection_event(
                         "disconnected", thread.last_error or "取得スレッドが終了しました。",
                         thread.stream_epoch)
                 was_connected = False
-                self.connection_state = "reconnecting"
+                if not self.capture_retry_active():
+                    self.connection_state = "retry_paused"
+                    self.camera_retry_wakeup.wait(0.5)
+                    self.camera_retry_wakeup.clear()
+                    continue
+                self.connection_state = "reconnecting" if previously_started else "connecting"
                 if not self.camera_supervisor_running:
                     break
-                time.sleep(retry_delay)
+                if previously_started:
+                    self.camera_retry_wakeup.wait(retry_delay)
+                    self.camera_retry_wakeup.clear()
                 if not self.camera_supervisor_running:
                     break
+                if not self.capture_retry_active():
+                    continue
+                if not previously_started:
+                    thread.start()
+                    time.sleep(0.25)
+                    continue
                 retry_delay = min(5.0, retry_delay * 2)
                 self.camera_restart_count += 1
                 replacement = self.create_camera_thread(thread.stream_epoch + 1)
@@ -1406,534 +1418,34 @@ class FrameStreamer:
         elif self.recording_finalizing:
             self.wait_for_recording_finalization()
         self.camera_supervisor_running = False
+        self.camera_retry_wakeup.set()
         current_thread = self.cam_thread
-        current_thread.stop()
+        if current_thread.ident is not None:
+            current_thread.stop()
         self.camera_supervisor_thread.join(timeout=5)
-        current_thread.join(timeout=10)
+        if current_thread.ident is not None:
+            current_thread.join(timeout=10)
         # 監視停止直前に参照が更新されていた場合も、最後のスレッドを確実に止める。
-        self.cam_thread.stop()
-        self.cam_thread.join(timeout=10)
+        if self.cam_thread.ident is not None:
+            self.cam_thread.stop()
+            self.cam_thread.join(timeout=10)
         self.preview.stop()
         self.preview.join(timeout=5)
 
 #######################################
-# Flask アプリの定義（Web API 部分）
+# HTTP API（カメラ制御とは別モジュール）
 #######################################
-app = Flask(__name__)
+app = create_frame_app(
+    lambda: frame_streamer_instance,
+    bandwidth_presets=BANDWIDTH_PRESETS,
+    default_trigger_source=DEFAULT_TRIGGER_SOURCE,
+    default_trigger_activation=DEFAULT_TRIGGER_ACTIVATION,
+)
 
-
-def reject_settings_change_while_recording():
-    if frame_streamer_instance and (
-            frame_streamer_instance.recording or frame_streamer_instance.recording_finalizing):
-        return jsonify({
-            "status": "error",
-            "message": "録画中または保存完了処理中は設定を変更できません。",
-        }), 409
-    return None
-
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    return response
-
-@app.route('/video_feed')
-def video_feed():
-    def generate():
-        last_sequence = -1
-        while True:
-            sequence, frame_data = (
-                frame_streamer_instance.preview.get_jpeg_packet()
-                if frame_streamer_instance else (0, None))
-            if frame_data and sequence != last_sequence:
-                last_sequence = sequence
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
-            time.sleep(0.01)
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-
-@app.route('/recordings')
-def recordings():
-    if not frame_streamer_instance:
-        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
-    try:
-        sessions = list_sessions(frame_streamer_instance.save_location)
-    except OSError as exc:
-        return jsonify({"status": "error", "message": f"保存データを読めません: {exc}"}), 500
-    return jsonify({
-        "status": "success",
-        "save_location": frame_streamer_instance.save_location,
-        "sessions": sessions,
-    })
-
-
-@app.route('/recordings/<session_id>')
-def recording_detail(session_id):
-    if not frame_streamer_instance:
-        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
-    try:
-        detail = session_detail(frame_streamer_instance.save_location, session_id)
-    except ValueError as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 400
-    except FileNotFoundError as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 404
-    except OSError as exc:
-        return jsonify({"status": "error", "message": f"保存データを読めません: {exc}"}), 500
-    return jsonify({"status": "success", "session": detail})
-
-
-@app.route('/recordings/<session_id>/preview/<filename>')
-def recording_preview(session_id, filename):
-    if not frame_streamer_instance:
-        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
-    try:
-        jpeg = render_preview_jpeg(frame_streamer_instance.save_location, session_id, filename)
-    except ValueError as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 400
-    except FileNotFoundError as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 404
-    except OSError as exc:
-        return jsonify({"status": "error", "message": f"画像を読めません: {exc}"}), 500
-    response = Response(jpeg, mimetype="image/jpeg")
-    response.headers["Cache-Control"] = "private, max-age=3600"
-    return response
-
-
-@app.route('/recordings/<session_id>/playback')
-def recording_playback(session_id):
-    if not frame_streamer_instance:
-        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
-    try:
-        manifest = playback_manifest(frame_streamer_instance.save_location, session_id)
-    except ValueError as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 400
-    except FileNotFoundError as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 404
-    except OSError as exc:
-        return jsonify({"status": "error", "message": f"再生情報を読めません: {exc}"}), 500
-    return jsonify({"status": "success", "playback": manifest})
-
-
-@app.route('/recordings/<session_id>/events/<int:epoch>/<int:center_us>.jpg')
-def recording_event_window(session_id, epoch, center_us):
-    if not frame_streamer_instance:
-        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
-    try:
-        jpeg = render_event_window_jpeg(
-            frame_streamer_instance.save_location, session_id, epoch, center_us,
-            request.args.get("window_us", 33_000), request.args.get("width", 720))
-    except (TypeError, ValueError) as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 400
-    except FileNotFoundError as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 404
-    except OSError as exc:
-        return jsonify({"status": "error", "message": f"EVS RAWを読めません: {exc}"}), 500
-    response = Response(jpeg, mimetype="image/jpeg")
-    response.headers["Cache-Control"] = "private, max-age=3600"
-    return response
-
-
-@app.route('/recordings/<session_id>/events/<int:epoch>/<int:center_us>.png')
-def recording_event_overlay(session_id, epoch, center_us):
-    if not frame_streamer_instance:
-        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
-    try:
-        png = render_event_overlay_png(
-            frame_streamer_instance.save_location, session_id, epoch, center_us,
-            request.args.get("window_us", 33_000), request.args.get("width", 960),
-            request.args.get("max_events", 50_000))
-    except (TypeError, ValueError) as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 400
-    except FileNotFoundError as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 404
-    except OSError as exc:
-        return jsonify({"status": "error", "message": f"EVS RAWを読めません: {exc}"}), 500
-    response = Response(png, mimetype="image/png")
-    response.headers["Cache-Control"] = "private, max-age=3600"
-    return response
-
-
-@app.route('/set_preview', methods=['POST'])
-def set_preview():
-    data = request.get_json(silent=True) or {}
-    preset = data.get("preset")
-    auto_degrade = data.get("auto_degrade", True)
-    if preset not in PREVIEW_PRESETS or not isinstance(auto_degrade, bool):
-        return jsonify({
-            "status": "error",
-            "message": "表示設定が不正です。",
-        }), 400
-    try:
-        preview_status = frame_streamer_instance.update_preview_preferences(
-            preset, auto_degrade, persist=bool(data.get("persist", True)))
-    except (OSError, ValueError) as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 400
-    return jsonify({
-        "status": "success",
-        "message": f"Frame表示を{PREVIEW_PRESETS[preset]['label']}へ変更しました。",
-        "preview": preview_status,
-    })
-
-@app.route('/set_save', methods=['POST'])
-def set_save():
-    guard = reject_settings_change_while_recording()
-    if guard:
-        return guard
-    data = request.get_json(silent=True) or {}
-    save_location = data.get('save_location')
-    save_filename = data.get('save_filename')
-    try:
-        frame_streamer_instance.update_save_settings(save_location, save_filename)
-    except (OSError, ValueError) as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 400
-    return jsonify({"status": "success", "message": "保存設定を更新しました。"})
-
-@app.route('/start_recording', methods=['POST'])
-def start_recording():
-    data = request.get_json(silent=True) or {}
-    try:
-        success = frame_streamer_instance.start_recording(data.get('session_id'))
-    except (OSError, ValueError) as exc:
-        return jsonify({"status": "error", "message": str(exc)}), 400
-    message = "Frame 録画を開始しました。" if success else "Frame 録画を開始できませんでした。"
-    return jsonify({
-        "status": "success" if success else "error",
-        "message": message,
-        "session_id": frame_streamer_instance.recording_session_id,
-    }), 200 if success else 409
-
-
-@app.route('/trigger_options')
-def trigger_options():
-    if not frame_streamer_instance:
-        return jsonify({"status": "error", "message": "カメラを初期化していません。"}), 503
-    options = frame_streamer_instance.cam_thread.get_trigger_options()
-    return jsonify({
-        "status": "success",
-        **options,
-        "configuration": frame_streamer_instance.cam_thread.trigger_configuration(),
-    })
-
-
-@app.route('/set_bandwidth_preset', methods=['POST'])
-def set_bandwidth_preset():
-    guard = reject_settings_change_while_recording()
-    if guard:
-        return guard
-    data = request.get_json(silent=True) or {}
-    preset = data.get("preset")
-    if preset not in BANDWIDTH_PRESETS:
-        return jsonify({"status": "error", "message": "safe / standard / high を指定してください。"}), 400
-    success, result = frame_streamer_instance.cam_thread.request_control_operation(
-        "set_bandwidth_preset", preset=preset)
-    if not success:
-        return jsonify({"status": "error", "message": result}), 500
-    config = load_config()
-    config.setdefault("frameCam", {})["bandwidthPreset"] = preset
-    # 帯域変更によりfps上限が下がった場合は、実際の復帰値も保存する。
-    config["frameCam"]["frameRate"] = frame_streamer_instance.cam_thread.free_run_fps
-    save_config(config)
-    return jsonify({
-        "status": "success",
-        "message": f"帯域プリセットを {preset} に設定しました。",
-        "bandwidth": result,
-        "framerate": frame_streamer_instance.cam_thread.framerate_capabilities(),
-    })
-
-
-@app.route('/set_external_trigger', methods=['POST'])
-def set_external_trigger():
-    guard = reject_settings_change_while_recording()
-    if guard:
-        return guard
-    data = request.get_json(silent=True) or {}
-    enabled = data.get("enabled")
-    source = data.get("source", DEFAULT_TRIGGER_SOURCE)
-    activation = data.get("activation", DEFAULT_TRIGGER_ACTIVATION)
-    if not isinstance(enabled, bool):
-        return jsonify({"status": "error", "message": "enabledは真偽値で指定してください。"}), 400
-    options = frame_streamer_instance.cam_thread.get_trigger_options()
-    if enabled and source not in options["sources"]:
-        return jsonify({"status": "error", "message": f"利用できないTriggerSourceです: {source}"}), 400
-    if enabled and activation not in options["activations"]:
-        return jsonify({"status": "error", "message": f"利用できないTriggerActivationです: {activation}"}), 400
-    success, result = frame_streamer_instance.cam_thread.request_control_operation(
-        "set_external_trigger", enabled=enabled, source=source, activation=activation)
-    if not success:
-        return jsonify({"status": "error", "message": result}), 500
-    return jsonify({
-        "status": "success",
-        "message": "外部トリガー駆動を有効にしました。" if enabled else "フリーラン駆動へ戻しました。",
-        "configuration": result,
-    })
-
-@app.route('/stop_recording', methods=['POST'])
-def stop_recording():
-    success = frame_streamer_instance.stop_recording(wait_for_writer=False)
-    message = (
-        "Frame の撮影受付を停止しました。残り画像はバックグラウンドで保存します。"
-        if success else "Frame は録画中ではありません。")
-    return jsonify({
-        "status": "success" if success else "error",
-        "message": message,
-        "finalizing": bool(frame_streamer_instance.recording_finalizing),
-    }), 200 if success else 409
-
-
-@app.route('/status')
-def status():
-    camera_ready = bool(
-        frame_streamer_instance and
-        frame_streamer_instance.cam_thread.cam and
-        frame_streamer_instance.cam_thread.streaming_active)
-    camera_thread = frame_streamer_instance.cam_thread if frame_streamer_instance else None
-    camera_settings = camera_thread.read_camera_settings() if camera_ready else {}
-    return jsonify({
-        "status": "success",
-        "streaming": camera_ready,
-        "frame_ready": bool(
-            frame_streamer_instance and frame_streamer_instance.preview.get_jpeg()),
-        "preview": frame_streamer_instance.preview.status(),
-        "recording": bool(frame_streamer_instance and frame_streamer_instance.recording),
-        "save_location": frame_streamer_instance.save_location if frame_streamer_instance else None,
-        "save_filename": frame_streamer_instance.save_filename if frame_streamer_instance else "",
-        "recording_finalizing": bool(
-            frame_streamer_instance and frame_streamer_instance.recording_finalizing),
-        "callback_count": camera_thread.callback_count if camera_thread else 0,
-        "frame_count": camera_thread.frame_count if camera_thread else 0,
-        "last_frame_status": camera_thread.last_frame_status if camera_thread else None,
-        "allocation_mode": camera_thread.allocation_mode if camera_thread else None,
-        "message": camera_thread.last_error if camera_thread else "カメラを初期化していません。",
-        "camera_settings": camera_settings,
-        "trigger_configuration": camera_thread.trigger_configuration() if camera_thread else {},
-        "external_trigger_monitor": (
-            camera_thread.external_trigger_monitor_status() if camera_thread else {}),
-        "recording_roi": dict(camera_thread.roi_configuration) if camera_thread else {},
-        "measured_fps": round(camera_thread.measured_fps(), 3) if camera_thread else 0,
-        "connection": {
-            "state": frame_streamer_instance.connection_state,
-            "restart_attempts": frame_streamer_instance.camera_restart_count,
-            "successful_reconnections": frame_streamer_instance.successful_reconnections,
-            "stream_epoch": camera_thread.stream_epoch if camera_thread else 0,
-        },
-        "bandwidth": camera_thread.bandwidth_status() if camera_thread else {},
-        "recording_quality": {
-            "session_id": frame_streamer_instance.recording_session_id,
-            "events": frame_streamer_instance.recording_sequence,
-            "complete": frame_streamer_instance.recording_complete_count,
-            "incomplete": frame_streamer_instance.recording_incomplete_count,
-            "frame_id_missing": frame_streamer_instance.recording_frame_gap_count,
-            "queue_drops": frame_streamer_instance.recording_queue_drop_count,
-            "queue_depth": frame_streamer_instance.recording_queue.qsize()
-                if frame_streamer_instance.recording_queue else 0,
-            "saved": frame_streamer_instance.image_thread.saved_count
-                if frame_streamer_instance.image_thread
-                else frame_streamer_instance.last_recording_summary.get("saved_frames", 0),
-            "write_failures": frame_streamer_instance.image_thread.failed_count
-                if frame_streamer_instance.image_thread
-                else frame_streamer_instance.last_recording_summary.get("write_failures", 0),
-            "save_fps": frame_streamer_instance.image_thread.performance_status()["save_fps"]
-                if frame_streamer_instance.image_thread
-                else frame_streamer_instance.last_recording_summary.get("save_fps", 0),
-            "write_megabytes_per_second": (
-                frame_streamer_instance.image_thread.performance_status()[
-                    "write_megabytes_per_second"]
-                if frame_streamer_instance.image_thread
-                else frame_streamer_instance.last_recording_summary.get(
-                    "write_megabytes_per_second", 0)),
-            "elapsed_seconds": round(
-                (time.time_ns() - frame_streamer_instance.recording_started_utc_ns) / 1e9, 1)
-                if frame_streamer_instance.recording and
-                frame_streamer_instance.recording_started_utc_ns else 0,
-        },
-    })
-
-# --- Exposure 設定用 API エンドポイント ---
-@app.route('/set_exposure', methods=['POST'])
-def set_exposure():
-    guard = reject_settings_change_while_recording()
-    if guard:
-        return guard
-    data = request.get_json(silent=True) or {}
-    mode = data.get('mode')
-    if mode not in ['Once', 'Continuous', 'Manual']:
-        return jsonify({"status": "error", "message": "Invalid mode specified. Use 'Once', 'Continuous', or 'Manual'."}), 400
-    try:
-        cam = frame_streamer_instance.cam_thread.cam
-        if cam is None:
-            return jsonify({"status": "error", "message": "カメラが初期化されていません。"}), 500
-
-        if mode in ['Once', 'Continuous']:
-            cam.ExposureAuto.set(mode)
-            time.sleep(0.1)
-            current_exposure_value = cam.ExposureTime.get()
-            print("Current Exposure value:", current_exposure_value)
-            return jsonify({"status": "success", "message": f"Exposure set to {current_exposure_value}."})
-        elif mode == "Manual":
-            manual_value = data.get("value")
-            if manual_value is None:
-                return jsonify({"status": "error", "message": "Manual value not provided."}), 400
-            try:
-                manual_value = float(manual_value)
-            except Exception:
-                return jsonify({"status": "error", "message": "Invalid manual value."}), 400
-            try:
-                min_exposure, max_exposure = cam.ExposureTime.get_range()
-            except Exception as e:
-                return jsonify({"status": "error", "message": f"Failed to get exposure range: {e}"}), 500
-            if not (min_exposure <= manual_value <= max_exposure):
-                return jsonify({"status": "error", "message": f"Manual exposure value must be between {min_exposure} and {max_exposure}."}), 400
-            cam.ExposureAuto.set("Off")
-            cam.ExposureTime.set(manual_value)
-            time.sleep(0.1)
-            current_exposure_value = cam.ExposureTime.get()
-            print("Manual Exposure set to:", current_exposure_value)
-            return jsonify({"status": "success", "message": f"Exposure manually set to {current_exposure_value}."})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# --- Gain 設定用 API エンドポイント ---
-@app.route('/set_gain', methods=['POST'])
-def set_gain():
-    guard = reject_settings_change_while_recording()
-    if guard:
-        return guard
-    data = request.get_json(silent=True) or {}
-    mode = data.get('mode')
-    if mode not in ['Once', 'Continuous', 'Manual']:
-        return jsonify({"status": "error", "message": "Invalid mode specified. Use 'Once', 'Continuous', or 'Manual'."}), 400
-    try:
-        cam = frame_streamer_instance.cam_thread.cam
-        if cam is None:
-            return jsonify({"status": "error", "message": "カメラが初期化されていません。"}), 500
-
-        if mode in ['Once', 'Continuous']:
-            cam.GainAuto.set(mode)
-            time.sleep(0.1)
-            current_gain_value = cam.Gain.get()
-            print("Current Gain value:", current_gain_value)
-            return jsonify({"status": "success", "message": f"Gain set to {current_gain_value}."})
-        elif mode == "Manual":
-            manual_value = data.get("value")
-            if manual_value is None:
-                return jsonify({"status": "error", "message": "Manual value not provided."}), 400
-            try:
-                manual_value = float(manual_value)
-            except Exception:
-                return jsonify({"status": "error", "message": "Invalid manual value."}), 400
-            try:
-                min_gain, max_gain = cam.Gain.get_range()
-            except Exception as e:
-                return jsonify({"status": "error", "message": f"Failed to get gain range: {e}"}), 500
-            if not (min_gain <= manual_value <= max_gain):
-                return jsonify({"status": "error", "message": f"Manual gain value must be between {min_gain} and {max_gain}."}), 400
-            cam.GainAuto.set("Off")
-            cam.Gain.set(manual_value)
-            time.sleep(0.1)
-            current_gain_value = cam.Gain.get()
-            print("Manual Gain set to:", current_gain_value)
-            return jsonify({"status": "success", "message": f"Gain manually set to {current_gain_value}."})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# --- FrameRate 設定用 API エンドポイント ---
-@app.route('/set_framerate', methods=['POST'])
-def set_framerate():
-    guard = reject_settings_change_while_recording()
-    if guard:
-        return guard
-    data = request.get_json(silent=True) or {}
-    fps = data.get('fps')
-    if fps is None:
-        return jsonify({"status": "error", "message": "fps not provided."}), 400
-    try:
-        fps = float(fps)
-        if not math.isfinite(fps) or fps <= 0:
-            return jsonify({"status": "error", "message": "fps must be a positive finite number."}), 400
-        cam_thread = frame_streamer_instance.cam_thread
-        capabilities = cam_thread.framerate_capabilities()
-        if not capabilities["minimum"] <= fps <= capabilities["maximum"]:
-            return jsonify({
-                "status": "error",
-                "message": (
-                    f"フレームレートは {capabilities['minimum']:g}〜"
-                    f"{capabilities['maximum']:g} fps で指定してください。"
-                ),
-            }), 400
-        success, result = cam_thread.request_control_operation("set_framerate", fps=fps)
-        if not success:
-            return jsonify({"status": "error", "message": result}), 500
-        persisted = True
-        persistence_error = None
-        try:
-            config = load_config()
-            config.setdefault("frameCam", {})["frameRate"] = float(result)
-            save_config(config)
-        except Exception as exc:
-            persisted = False
-            persistence_error = str(exc)
-        return jsonify({
-            "status": "success",
-            "fps": result,
-            "capabilities": cam_thread.framerate_capabilities(),
-            "persisted": persisted,
-            "persistence_error": persistence_error,
-            "message": (
-                f"フレームレートを {result:g} fpsに設定し、再起動後の設定にも保存しました。"
-                if persisted else
-                f"フレームレートは {result:g} fpsに設定しましたが、設定ファイルへ保存できませんでした。"
-            ),
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# --- WhiteBalance 設定用 API エンドポイント ---
-@app.route('/set_whitebalance', methods=['POST'])
-def set_whitebalance():
-    guard = reject_settings_change_while_recording()
-    if guard:
-        return guard
-    data = request.get_json(silent=True) or {}
-    mode = data.get('mode')
-    if mode not in ['Once', 'Continuous']:
-        return jsonify({"status": "error", "message": "Invalid mode specified. Use 'Once' or 'Continuous'."}), 400
-    try:
-        cam = frame_streamer_instance.cam_thread.cam
-        if cam is None:
-            return jsonify({"status": "error", "message": "カメラが初期化されていません。"}), 500
-        cam.BalanceWhiteAuto.set(mode)
-        return jsonify({"status": "success", "message": f"WhiteBalance set to {mode}."})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# --- 現在の Exposure, Gain 値を返す API エンドポイント ---
-@app.route('/get_settings', methods=['GET'])
-def get_settings():
-    try:
-        cam = frame_streamer_instance.cam_thread.cam
-        if cam is None:
-            return jsonify({"status": "error", "message": "カメラが初期化されていません。"}), 500
-        exposure_value = cam.ExposureTime.get()
-        gain_value = cam.Gain.get()
-        fps = frame_streamer_instance.cam_thread.framerate_capabilities()
-        return jsonify({
-            "status": "success",
-            "exposure": exposure_value,
-            "gain": gain_value,
-            "fps": fps["configured"],
-            "fps_target": fps["target"],
-            "fps_measured": fps["measured"],
-            "fps_min": fps["minimum"],
-            "fps_max": fps["maximum"],
-            "fps_increment": fps["increment"],
-        })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
 
 def run_flask_server(port):
-    app.run(host='127.0.0.1', port=port, debug=False)
+    app.run(host="127.0.0.1", port=port, debug=False)
+
 
 #######################################
 # メイン処理

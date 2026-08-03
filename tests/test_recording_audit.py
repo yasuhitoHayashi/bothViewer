@@ -11,10 +11,11 @@ import unittest
 import cv2
 import numpy as np
 
-from evsStreamer import EVSStreamer, build_synchronization_report
+from evsStreamer import EVSStreamer
 from frameStreamer import (
     CameraThread, FrameStreamer, ImageWriterThread, calculate_evs_matching_frame_roi)
 from preview_manager import LatestFramePreview
+from synchronization import build_synchronization_report
 
 
 class FakeFeature:
@@ -219,6 +220,7 @@ class RecordingAuditTests(unittest.TestCase):
         streamer.connection_state = "connected"
         streamer.last_connection_error = None
         streamer.reconnect_wakeup = threading.Event()
+        streamer.capture_active_until = time.monotonic() + 10
         streamer.events_stream = FakeEventsStream()
         streamer.connection_writer = None
         streamer.recording_lock = threading.RLock()
@@ -229,6 +231,23 @@ class RecordingAuditTests(unittest.TestCase):
         self.assertEqual(streamer.connection_state, "reconnecting")
         self.assertTrue(streamer.events_stream.stopped)
         self.assertTrue(streamer.reconnect_wakeup.is_set())
+
+    def test_camera_retry_leases_follow_capture_tab_activity(self):
+        evs = EVSStreamer.__new__(EVSStreamer)
+        evs.reconnect_wakeup = threading.Event()
+        evs.capture_active_until = 0.0
+        self.assertFalse(evs.capture_retry_active())
+        self.assertTrue(evs.set_capture_active(True, lease_seconds=1))
+        self.assertTrue(evs.reconnect_wakeup.is_set())
+        self.assertFalse(evs.set_capture_active(False))
+
+        frame = FrameStreamer.__new__(FrameStreamer)
+        frame.camera_retry_wakeup = threading.Event()
+        frame.capture_active_until = 0.0
+        self.assertFalse(frame.capture_retry_active())
+        self.assertTrue(frame.set_capture_active(True, lease_seconds=1))
+        self.assertTrue(frame.camera_retry_wakeup.is_set())
+        self.assertFalse(frame.set_capture_active(False))
 
     def test_trigger_monitor_counts_edges_and_reports_reference_frequency(self):
         streamer = EVSStreamer.__new__(EVSStreamer)
