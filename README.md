@@ -5,16 +5,17 @@ bothViewer provides a web-based control console for simultaneously viewing and r
 ## Project layout
 
 - `launcher.py`: dependency check, shared recording-directory resolution, and process supervision
-- `evsStreamer.py`: EVS device lifecycle, RAW recording, and Trigger In monitoring
-- `frameStreamer.py`: frame-camera lifecycle, Bayer recording, and camera controls
+- `frameStreamer.py`, `evsStreamer.py`: backward-compatible executable entry points
+- `bothviewer/cameras/frame.py`: frame-camera lifecycle, Bayer recording, and controls
+- `bothviewer/cameras/evs.py`: EVS lifecycle, RAW recording, and Trigger In monitoring
 - `bothviewer/api/evs.py`: hardware-independent port 5001 HTTP API factory
 - `bothviewer/api/frame.py`: hardware-independent port 5002 HTTP API factory
 - `bothviewer/api/common.py`: API response helpers shared by both servers
-- `camera_geometry.py`: physical field-of-view and camera-ROI calculations
-- `preview_manager.py`: recording-priority latest-frame JPEG workers
-- `synchronization.py`: frame/trigger audit and `synchronization.csv` generation
-- `recording_catalog.py`: saved-session catalog, Bayer preview, and synchronized playback rendering
-- `config_manager.py`: configuration, save-path validation, and session-directory helpers
+- `bothviewer/core/geometry.py`: physical field-of-view and camera-ROI calculations
+- `bothviewer/core/preview.py`: recording-priority latest-frame JPEG workers
+- `bothviewer/core/synchronization.py`: frame/trigger audit and `synchronization.csv` generation
+- `bothviewer/core/recordings.py`: saved-session catalog, Bayer preview, and synchronized playback rendering
+- `bothviewer/core/config.py`: configuration, save-path validation, and session-directory helpers
 - `bothViewer.html`: UI markup only
 - `static/bothViewer.css`, `static/bothViewer.js`: UI presentation and behavior
 - `tests/`: hardware-independent regression tests

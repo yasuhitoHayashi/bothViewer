@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from config_manager import (
+from bothviewer.core.config import (
     normalize_save_settings, platform_default_recording_directory,
     resolve_recording_directory,
 )

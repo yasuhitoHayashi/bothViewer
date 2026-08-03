@@ -7,7 +7,7 @@ from unittest import mock
 import cv2
 import numpy as np
 
-from recording_catalog import (
+from bothviewer.core.recordings import (
     list_sessions, playback_manifest, render_preview_jpeg, session_detail,
 )
 
@@ -99,7 +99,8 @@ class RecordingCatalogTests(unittest.TestCase):
     def test_builds_real_time_synchronized_playback_manifest(self):
         with tempfile.TemporaryDirectory() as root:
             session_id = self.make_session(root)
-            with mock.patch("recording_catalog._first_raw_trigger_us", return_value=100):
+            with mock.patch(
+                    "bothviewer.core.recordings._first_raw_trigger_us", return_value=100):
                 manifest = playback_manifest(root, session_id)
             self.assertEqual(manifest["frame_count"], 2)
             self.assertEqual(manifest["duration_ms"], 100.0)

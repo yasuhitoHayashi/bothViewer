@@ -8,7 +8,7 @@ import time
 
 from flask import Flask, Response, jsonify, request
 
-from preview_manager import PREVIEW_PRESETS
+from bothviewer.core.preview import PREVIEW_PRESETS
 from .common import add_cors_headers
 
 

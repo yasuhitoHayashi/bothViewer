@@ -11,11 +11,11 @@ import unittest
 import cv2
 import numpy as np
 
-from evsStreamer import EVSStreamer
-from frameStreamer import (
+from bothviewer.cameras.evs import EVSStreamer
+from bothviewer.cameras.frame import (
     CameraThread, FrameStreamer, ImageWriterThread, calculate_evs_matching_frame_roi)
-from preview_manager import LatestFramePreview
-from synchronization import build_synchronization_report
+from bothviewer.core.preview import LatestFramePreview
+from bothviewer.core.synchronization import build_synchronization_report
 
 
 class FakeFeature:

@@ -68,7 +68,7 @@ def main():
     def build_commands():
         # Import only after dependency validation so a missing PyYAML still
         # produces the launcher's consolidated installation guidance.
-        from config_manager import load_config, resolve_recording_directory
+        from bothviewer.core.config import load_config, resolve_recording_directory
         config = load_config()
         configured = config.get("recording", {}).get("save_location", "./records")
         save_location = resolve_recording_directory(

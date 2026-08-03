@@ -8,7 +8,9 @@ import re
 import yaml
 from datetime import datetime
 
-CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.yaml")
+PROJECT_DIRECTORY = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+CONFIG_FILE = os.path.join(PROJECT_DIRECTORY, "config.yaml")
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 AUTOMATIC_SAVE_LOCATIONS = {
     "", "auto", "records", "./records", ".\\records",
@@ -21,7 +23,7 @@ def platform_default_recording_directory(
     """Return ``records`` beside bothViewer.html on macOS and Windows."""
     del platform, home_directory  # Kept for compatibility with older callers.
     application_directory = os.path.abspath(
-        application_directory or os.path.dirname(__file__))
+        application_directory or PROJECT_DIRECTORY)
     return os.path.join(application_directory, "records")
 
 

@@ -9,9 +9,9 @@ import time
 
 from flask import Flask, Response, jsonify, request
 
-from config_manager import load_config, save_config
-from preview_manager import PREVIEW_PRESETS
-from recording_catalog import (
+from bothviewer.core.config import load_config, save_config
+from bothviewer.core.preview import PREVIEW_PRESETS
+from bothviewer.core.recordings import (
     list_sessions,
     playback_manifest,
     render_event_overlay_png,
