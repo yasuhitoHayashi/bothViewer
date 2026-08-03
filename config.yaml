@@ -30,13 +30,13 @@ frameCam:
     outputInverter: true
     outputLine: Line0
     source: Line1
-  frameRate: 30.000001907348633
+  frameRate: 10.0
   gain:
     mode: Manual
     value: 0
 preview:
   autoDegrade: true
-  preset: standard
+  preset: record_priority
 recording:
   file_prefix: record
-  save_location: ./recordings
+  save_location: ./records

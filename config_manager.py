@@ -10,6 +10,30 @@ from datetime import datetime
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.yaml")
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+AUTOMATIC_SAVE_LOCATIONS = {
+    "", "auto", "records", "./records", ".\\records",
+    "./recordings", ".\\recordings",
+}
+
+
+def platform_default_recording_directory(
+        platform=None, home_directory=None, application_directory=None):
+    """Return ``records`` beside bothViewer.html on macOS and Windows."""
+    del platform, home_directory  # Kept for compatibility with older callers.
+    application_directory = os.path.abspath(
+        application_directory or os.path.dirname(__file__))
+    return os.path.join(application_directory, "records")
+
+
+def resolve_recording_directory(
+        configured_location, platform=None, home_directory=None,
+        application_directory=None):
+    """Resolve ``auto`` and the former relative default without moving data."""
+    value = str(configured_location or "").strip()
+    if value.lower() in AUTOMATIC_SAVE_LOCATIONS:
+        return platform_default_recording_directory(
+            platform, home_directory, application_directory)
+    return os.path.abspath(os.path.expanduser(value))
 
 
 def create_session_directory(save_location, session_id):
@@ -43,7 +67,7 @@ def load_config():
                 "gain": {"mode": "Manual", "value": 0}
             },
             "recording": {
-                "save_location": "./recordings",
+                "save_location": "./records",
                 "file_prefix": "record"
             },
             "preview": {

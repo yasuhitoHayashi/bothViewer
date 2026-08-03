@@ -41,6 +41,8 @@ Press `Ctrl+C` in the terminal to stop both servers cleanly.
 
 ## Recording output
 
+By default, `launcher.py` creates a `records` directory beside `bothViewer.html` and passes its absolute path to both camera servers. This rule is the same on macOS and Windows (for example, `/path/to/bothViewer/records` or `C:/path/to/bothViewer/records`). The GUI may still be used to select a different absolute recording directory for the current run.
+
 Each recording creates one timestamped session directory shared by both cameras:
 
 - `frame/images/*.pgm`: uncompressed lossless 8-bit Bayer frames with UTC time, sequence, and camera frame ID in each filename
@@ -63,6 +65,16 @@ The EVS view includes a live Trigger In monitor even when no recording is active
 The frame view has a corresponding external-trigger monitor. When external drive is enabled it shows the selected input line and activation edge, complete/incomplete trigger-driven frame callbacks, measured frame frequency, latest-frame age, and the `Line0 ExposureActive -> EVS Trigger In` synchronization state. Thus an external input starts the frame exposure, and that exposure simultaneously produces the timing edge recorded by EVS.
 
 The frame camera is configured with a hardware ROI matching the EVS sensor's physical field of view (1800×1012 at the default sensor specifications, with the configured frame shift applied). This avoids transferring the unused border pixels. If the camera rejects hardware ROI control, the application restores full-sensor acquisition and automatically falls back to the same software crop. The actual mode, size, and sensor offset are stored in `camera_settings.json`, `frame_summary.json`, `/status`, and the frame audit CSV.
+
+## Saved-data browser and synchronized playback
+
+The **保存データ** tab reads completed and interrupted sessions from the configured recording directory. It shows recording duration, saved-frame and reference-edge counts, synchronization matches, ROI, loss counters, file sizes, and on-demand Bayer previews without modifying the source data.
+
+Synchronized playback uses each `matched` row in `synchronization.csv`. Frame images retain their measured host-time spacing, while the paired EVS sensor timestamp selects a short window from the corresponding RAW stream epoch. EVS background pixels are transparent and the events are overlaid directly on the Bayer frame, with positive events in white and negative events in black. Controls provide overlay opacity, pause/resume, seeking, 0.25×–4× playback speed, and 10/33/100 ms EVS accumulation windows. At 1×, display updates may skip intermediate frames if decoding cannot keep up; the player preserves experimental time instead of accumulating playback delay.
+
+EVS playback rendering has four load presets. **軽量** updates the overlay at up to 5 fps with 20,000 events per window, **標準** uses 10 fps and 50,000 events, **高密度** uses 15 fps and 100,000 events, and **全描画** updates on every saved frame without event thinning. Thinning is uniform and display-only: the RAW file and synchronization timeline are never modified, and frame playback continues at its measured real-time cadence.
+
+EVS windows and Bayer previews are generated only when requested and cached in memory/browser cache. Source PGM and RAW files remain unchanged.
 
 ## Recording-priority live preview
 

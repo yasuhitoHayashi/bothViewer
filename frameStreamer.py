@@ -21,6 +21,10 @@ from flask import Flask, Response, request, jsonify
 import global_calc as g_calc
 from config_manager import create_session_directory, load_config, save_config, save_config_snapshot
 from preview_manager import LatestFramePreview, PREVIEW_PRESETS
+from recording_catalog import (
+    list_sessions, playback_manifest, render_event_overlay_png, render_event_window_jpeg,
+    render_preview_jpeg, session_detail,
+)
 
 frame_streamer_instance = None
 
@@ -1389,6 +1393,10 @@ class FrameStreamer:
 
     def update_save_settings(self, save_location, save_filename):
         self.save_location, self.save_filename = normalize_save_settings(save_location, save_filename)
+        config = load_config()
+        config.setdefault("recording", {})["save_location"] = self.save_location
+        config["recording"]["file_prefix"] = self.save_filename
+        save_config(config)
         print(f"保存設定更新: 保存先={self.save_location}, ファイル名のプレフィックス={self.save_filename}")
         return True
 
@@ -1444,6 +1452,107 @@ def video_feed():
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
             time.sleep(0.01)
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/recordings')
+def recordings():
+    if not frame_streamer_instance:
+        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
+    try:
+        sessions = list_sessions(frame_streamer_instance.save_location)
+    except OSError as exc:
+        return jsonify({"status": "error", "message": f"保存データを読めません: {exc}"}), 500
+    return jsonify({
+        "status": "success",
+        "save_location": frame_streamer_instance.save_location,
+        "sessions": sessions,
+    })
+
+
+@app.route('/recordings/<session_id>')
+def recording_detail(session_id):
+    if not frame_streamer_instance:
+        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
+    try:
+        detail = session_detail(frame_streamer_instance.save_location, session_id)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    except OSError as exc:
+        return jsonify({"status": "error", "message": f"保存データを読めません: {exc}"}), 500
+    return jsonify({"status": "success", "session": detail})
+
+
+@app.route('/recordings/<session_id>/preview/<filename>')
+def recording_preview(session_id, filename):
+    if not frame_streamer_instance:
+        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
+    try:
+        jpeg = render_preview_jpeg(frame_streamer_instance.save_location, session_id, filename)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    except OSError as exc:
+        return jsonify({"status": "error", "message": f"画像を読めません: {exc}"}), 500
+    response = Response(jpeg, mimetype="image/jpeg")
+    response.headers["Cache-Control"] = "private, max-age=3600"
+    return response
+
+
+@app.route('/recordings/<session_id>/playback')
+def recording_playback(session_id):
+    if not frame_streamer_instance:
+        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
+    try:
+        manifest = playback_manifest(frame_streamer_instance.save_location, session_id)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    except OSError as exc:
+        return jsonify({"status": "error", "message": f"再生情報を読めません: {exc}"}), 500
+    return jsonify({"status": "success", "playback": manifest})
+
+
+@app.route('/recordings/<session_id>/events/<int:epoch>/<int:center_us>.jpg')
+def recording_event_window(session_id, epoch, center_us):
+    if not frame_streamer_instance:
+        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
+    try:
+        jpeg = render_event_window_jpeg(
+            frame_streamer_instance.save_location, session_id, epoch, center_us,
+            request.args.get("window_us", 33_000), request.args.get("width", 720))
+    except (TypeError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    except OSError as exc:
+        return jsonify({"status": "error", "message": f"EVS RAWを読めません: {exc}"}), 500
+    response = Response(jpeg, mimetype="image/jpeg")
+    response.headers["Cache-Control"] = "private, max-age=3600"
+    return response
+
+
+@app.route('/recordings/<session_id>/events/<int:epoch>/<int:center_us>.png')
+def recording_event_overlay(session_id, epoch, center_us):
+    if not frame_streamer_instance:
+        return jsonify({"status": "error", "message": "サーバーを初期化していません。"}), 503
+    try:
+        png = render_event_overlay_png(
+            frame_streamer_instance.save_location, session_id, epoch, center_us,
+            request.args.get("window_us", 33_000), request.args.get("width", 960),
+            request.args.get("max_events", 50_000))
+    except (TypeError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+    except OSError as exc:
+        return jsonify({"status": "error", "message": f"EVS RAWを読めません: {exc}"}), 500
+    response = Response(png, mimetype="image/png")
+    response.headers["Cache-Control"] = "private, max-age=3600"
+    return response
 
 
 @app.route('/set_preview', methods=['POST'])
@@ -1588,6 +1697,8 @@ def status():
             frame_streamer_instance and frame_streamer_instance.preview.get_jpeg()),
         "preview": frame_streamer_instance.preview.status(),
         "recording": bool(frame_streamer_instance and frame_streamer_instance.recording),
+        "save_location": frame_streamer_instance.save_location if frame_streamer_instance else None,
+        "save_filename": frame_streamer_instance.save_filename if frame_streamer_instance else "",
         "recording_finalizing": bool(
             frame_streamer_instance and frame_streamer_instance.recording_finalizing),
         "callback_count": camera_thread.callback_count if camera_thread else 0,

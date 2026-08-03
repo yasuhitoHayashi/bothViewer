@@ -116,6 +116,7 @@ Licensed under the Apache License, Version 2.0.
     .btn-block { width: 100%; }
 
     .video-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .video-grid.vertical { grid-template-columns: 1fr; }
     .video-card { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 12px 40px rgba(0,0,0,.2); }
     .video-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
     .video-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
@@ -197,6 +198,7 @@ Licensed under the Apache License, Version 2.0.
       .system-status .status-label { display: none; }
       .workspace { padding: 16px; }
       .video-grid { grid-template-columns: 1fr; }
+      #layoutButton { display: none; }
       .control-panel { display: block; }
       details { margin-bottom: 9px; }
       .stream-stage { min-height: 210px; }
@@ -207,233 +209,14 @@ Licensed under the Apache License, Version 2.0.
       .trigger-monitor { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .toast-region { top: 72px; right: 16px; }
     }
-
-    /* Compact laboratory-console appearance. Functional IDs and API wiring stay unchanged. */
-    :root {
-      --bg: #101214;
-      --surface: #1b1e20;
-      --surface-raised: #23272a;
-      --border: #2c2f32;
-      --text: #e6e7e6;
-      --muted: #8d9190;
-      --accent: #9db7ca;
-      --accent-strong: #6f91aa;
-      --danger: #d9877d;
-      --success: #85b592;
-      --warning: #c5a15e;
-      --radius: 4px;
-    }
-
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: "Helvetica Neue", Helvetica, "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
-    }
-
-    .topbar {
-      position: static;
-      min-height: 57px;
-      padding: 10px 20px;
-      border-bottom-color: var(--border);
-      background: #16181a;
-      backdrop-filter: none;
-    }
-
-    .brand { align-items: baseline; gap: 12px; }
-    .brand-mark { display: none; }
-    .brand strong { display: inline; font-size: 16px; font-weight: 600; letter-spacing: 0; }
-    .brand small { display: inline; margin-left: 12px; color: var(--muted); font-size: 13px; letter-spacing: 0; }
-    .topbar-center { display: flex; align-items: center; gap: 4px; }
-    .nav-tab {
-      min-height: 34px;
-      padding: 6px 16px;
-      border: 1px solid transparent;
-      border-radius: 4px;
-      background: transparent;
-      color: #a8acab;
-      font-size: 13px;
-    }
-    .nav-tab.active { background: #e6e7e6; color: #16181a; }
-    .system-status { gap: 18px; font-size: 13px; }
-    .status-dot { width: 7px; height: 7px; box-shadow: none; }
-    .status-dot.online, .status-dot.recording { box-shadow: none; }
-
-    .workspace {
-      grid-template-columns: minmax(0, 1fr) 320px;
-      gap: 0;
-      max-width: none;
-      margin: 0;
-      padding: 0;
-      background: #16181a;
-      min-height: calc(100vh - 57px);
-    }
-    .viewer-area { padding: 20px; border-right: 1px solid var(--border); }
-    .viewer-toolbar { margin-bottom: 12px; }
-    .viewer-toolbar h1, .control-heading h2 { font-size: 14px; font-weight: 600; }
-    .btn {
-      min-height: 38px;
-      padding: 7px 14px;
-      border-color: #3a3e41;
-      border-radius: 4px;
-      background: #23272a;
-      font-size: 13px;
-      transition: background .12s, border-color .12s;
-    }
-    .btn:hover { border-color: #4a4e51; background: #2b2f33; }
-    .btn:active { transform: none; }
-    .btn-primary { border-color: #7397b0; background: #587b95; color: #f1f5f7; }
-    .btn-primary:hover { border-color: #88a9bf; background: #6689a3; }
-    .btn-danger { border-color: #8a3229; background: #7a2a22; color: #ffe4e0; }
-    .btn-danger:hover { border-color: #9a3c33; background: #8f3229; }
-    .btn-stop { border-color: #3a3e41; background: #23272a; }
-
-    .video-grid { gap: 16px; }
-    .video-card { overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-    .video-card-header { padding: 0 0 8px; border: 0; }
-    .video-title { font-size: 14px; font-weight: 600; }
-    .video-meta { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
-    .stream-stage { min-height: 240px; border: 1px solid var(--border); background: #070809; }
-    .stream-hint { border-radius: 3px; }
-    .trigger-monitor { border: 1px solid var(--border); border-top: 0; }
-    .trigger-monitor-item { background: #191c1e; }
-
-    .record-panel {
-      margin-top: 16px;
-      padding: 0;
-      border-color: var(--border);
-      border-radius: 0;
-      background: #1b1e20;
-    }
-    .record-panel-heading { margin: 0; padding: 14px; }
-    .record-panel-heading h3 { font-size: 14px; font-weight: 600; }
-    .session-label { color: var(--muted); font-size: 12px; }
-    .viewer-record-panel .quality-grid {
-      grid-template-columns: repeat(7, minmax(0, 1fr));
-      gap: 0;
-      border-top: 1px solid var(--border);
-      background: #191c1e;
-    }
-    .quality-metric {
-      min-width: 0;
-      padding: 10px 8px;
-      border: 0;
-      border-right: 1px solid var(--border);
-      border-radius: 0;
-      background: transparent;
-      text-align: left;
-    }
-    .quality-metric:nth-child(7n) { border-right: 0; }
-    .quality-metric:nth-child(n+8) { border-top: 1px solid var(--border); }
-    .quality-metric strong { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 18px; font-weight: 500; }
-    .quality-metric span { font-size: 10px; }
-
-    .control-panel { background: #16181a; }
-    .control-heading { min-height: 51px; margin: 0; padding: 14px 18px; border-bottom: 1px solid var(--border); }
-    details { margin: 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
-    summary { padding: 13px 18px; font-size: 13px; color: #a8acab; }
-    details[open] summary { border-bottom: 0; padding-bottom: 4px; }
-    .details-body { padding: 8px 18px 16px; }
-    input, select { min-height: 38px; border-color: #3a3e41; border-radius: 4px; background: #101214; font-size: 13px; }
-    .field { margin-bottom: 10px; }
-    .help { color: var(--muted); font-size: 12px; }
-    dialog { border-radius: 4px; }
-
-    [hidden] { display: none !important; }
-    .data-page {
-      display: grid;
-      grid-template-columns: 340px minmax(0, 1fr);
-      min-height: calc(100vh - 57px);
-      background: #16181a;
-    }
-    .session-sidebar { border-right: 1px solid var(--border); }
-    .session-sidebar-header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
-    .session-root { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-    .session-search { padding: 12px 16px; border-bottom: 1px solid var(--border); }
-    .session-list { max-height: calc(100vh - 151px); overflow-y: auto; }
-    .session-list-empty { padding: 24px 16px; color: var(--muted); font-size: 13px; text-align: center; }
-    .session-item { width: 100%; padding: 12px 16px; border: 0; border-bottom: 1px solid var(--border); border-left: 2px solid transparent; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
-    .session-item:hover { background: #1b1e20; }
-    .session-item.active { border-left-color: var(--accent-strong); background: #1e2124; }
-    .session-item-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-    .session-item-heading strong { overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-    .session-item-heading time { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
-    .session-item-meta { display: block; margin-top: 2px; color: #a8acab; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; }
-    .quality-badge { display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 3px; background: #22301f; color: var(--success); font-size: 11px; }
-    .quality-badge.loss { background: #33211f; color: var(--danger); }
-    .quality-badge.incomplete { background: #332b1f; color: var(--warning); }
-    .data-content { min-width: 0; padding: 20px; }
-    .data-empty { display: grid; min-height: 55vh; place-items: center; color: var(--muted); font-size: 13px; }
-    .data-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 16px; }
-    .data-header h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
-    .data-path { display: block; max-width: 900px; overflow: hidden; color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-    .data-quality-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-bottom: 20px; border: 1px solid var(--border); background: #1b1e20; }
-    .data-quality-grid .quality-metric { padding: 12px 14px; }
-    .data-quality-grid .quality-metric:nth-child(n) { border-top: 0; }
-    .data-quality-grid .quality-metric:last-child { border-right: 0; }
-    .data-section { margin-top: 20px; }
-    .data-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
-    .data-section-heading h2 { margin: 0; font-size: 13px; font-weight: 600; }
-    .data-section-heading span { color: var(--muted); font-size: 11px; }
-    .saved-preview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-    .saved-preview { position: relative; min-height: 120px; aspect-ratio: 16 / 10; overflow: hidden; border: 1px solid var(--border); background: #101214; }
-    .saved-preview img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
-    .saved-preview span { position: absolute; right: 0; bottom: 0; left: 0; overflow: hidden; padding: 5px 7px; background: rgba(16,18,20,.78); color: #a8acab; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
-    .file-list { border: 1px solid var(--border); background: #1b1e20; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; }
-    .file-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px 100px; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--border); color: #a8acab; }
-    .file-row:last-child { border-bottom: 0; }
-    .file-row span:nth-child(n+2) { text-align: right; }
-    .playback-panel { border: 1px solid var(--border); background: #101214; }
-    .playback-placeholder { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 90px; padding: 16px; color: var(--muted); font-size: 12px; }
-    .playback-view { position: relative; display: grid; min-height: 360px; max-height: 68vh; place-items: center; overflow: hidden; background: #08090a; }
-    .playback-view img { display: block; grid-area: 1 / 1; width: 100%; height: 100%; min-height: 360px; max-height: 68vh; object-fit: contain; }
-    .playback-view .event-overlay { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; opacity: .82; pointer-events: none; }
-    .playback-label { position: absolute; top: 8px; left: 8px; z-index: 1; padding: 3px 7px; border: 1px solid rgba(255,255,255,.12); border-radius: 3px; background: rgba(16,18,20,.78); color: #e6e7e6; font-size: 10px; }
-    .playback-controls { display: grid; grid-template-columns: auto minmax(120px, 1fr) auto auto auto auto minmax(100px, .4fr); align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--border); background: #1b1e20; }
-    .playback-controls input[type="range"] { min-height: 24px; padding: 0; accent-color: var(--accent-strong); }
-    .playback-controls select { min-height: 34px; width: auto; padding: 5px 28px 5px 8px; }
-    .overlay-opacity { display: grid; grid-template-columns: auto minmax(70px, 1fr); align-items: center; gap: 6px; color: var(--muted); font-size: 10px; white-space: nowrap; }
-    .overlay-opacity input { min-height: 22px; padding: 0; }
-    .playback-time { min-width: 120px; color: #a8acab; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; text-align: right; }
-    .playback-frame-meta { padding: 7px 12px; border-top: 1px solid var(--border); color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 10px; }
-
-    @media (max-width: 1100px) {
-      .workspace { grid-template-columns: 1fr; }
-      .viewer-area { border-right: 0; border-bottom: 1px solid var(--border); }
-      .control-panel { display: block; }
-      .control-heading, .record-panel { grid-column: auto; }
-      .data-quality-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .data-quality-grid .quality-metric:nth-child(3n) { border-right: 0; }
-      .data-quality-grid .quality-metric:nth-child(n+4) { border-top: 1px solid var(--border); }
-    }
-    @media (max-width: 720px) {
-      .topbar-center { display: none; }
-      .workspace { padding: 0; }
-      .viewer-area { padding: 16px; }
-      .viewer-record-panel .quality-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .quality-metric:nth-child(7n) { border-right: 1px solid var(--border); }
-      .quality-metric:nth-child(n+8) { border-top: 0; }
-      .quality-metric:nth-child(3n) { border-right: 0; }
-      .quality-metric:nth-child(n+4) { border-top: 1px solid var(--border); }
-      .data-page { grid-template-columns: 1fr; }
-      .session-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
-      .session-list { max-height: 300px; }
-      .saved-preview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .playback-controls { grid-template-columns: auto minmax(100px, 1fr) auto; }
-      .playback-controls select { width: 100%; }
-      .playback-time { min-width: 0; text-align: left; }
-    }
   </style>
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">B</div>
-      <div><strong>bothViewer</strong><small>イベント／フレーム同時計測</small></div>
+      <div><strong>Both Viewer</strong><small>DUAL CAMERA CONSOLE</small></div>
     </div>
-    <nav class="topbar-center" aria-label="画面">
-      <button id="captureTabButton" class="nav-tab active" type="button" aria-current="page">撮影</button>
-      <button id="dataTabButton" class="nav-tab" type="button">保存データ</button>
-    </nav>
     <div class="system-status" aria-label="接続状態">
       <span class="status-item"><span id="evsStatusDot" class="status-dot"></span><span class="status-label">EVS</span></span>
       <span class="status-item"><span id="frameStatusDot" class="status-dot"></span><span class="status-label">FRAME</span></span>
@@ -441,12 +224,13 @@ Licensed under the Apache License, Version 2.0.
     </div>
   </header>
 
-  <main id="capturePage" class="workspace">
+  <main class="workspace">
     <section class="viewer-area" aria-labelledby="viewerTitle">
       <div class="viewer-toolbar">
         <h1 id="viewerTitle">ライブビュー</h1>
         <div class="toolbar-actions">
           <button id="evsReconnectButton" class="btn" type="button" data-action="reconnectEvs">EVSを再接続</button>
+          <button id="layoutButton" class="btn" type="button">縦に並べる</button>
         </div>
       </div>
       <div id="videoGrid" class="video-grid">
@@ -540,7 +324,7 @@ Licensed under the Apache License, Version 2.0.
         </div>
       </details>
 
-      <details open>
+      <details>
         <summary>EVS バイアス</summary>
         <div class="details-body">
           <div class="field-row">
@@ -551,7 +335,7 @@ Licensed under the Apache License, Version 2.0.
         </div>
       </details>
 
-      <details open>
+      <details>
         <summary>外部トリガー駆動</summary>
         <div class="details-body">
           <label class="check-row"><input id="frame_trigger_enabled" type="checkbox">フレームカメラを外部トリガーで撮像</label>
@@ -562,7 +346,7 @@ Licensed under the Apache License, Version 2.0.
         </div>
       </details>
 
-      <details open>
+      <details>
         <summary>転送帯域</summary>
         <div class="details-body">
           <div class="field"><label for="bandwidth_preset">フレームカメラ帯域</label><select id="bandwidth_preset">
@@ -575,7 +359,7 @@ Licensed under the Apache License, Version 2.0.
         </div>
       </details>
 
-      <details open>
+      <details>
         <summary>露光・フレームレート</summary>
         <div class="details-body">
           <div class="button-row">
@@ -590,7 +374,7 @@ Licensed under the Apache License, Version 2.0.
         </div>
       </details>
 
-      <details open>
+      <details>
         <summary>ゲイン・ホワイトバランス</summary>
         <div class="details-body">
           <div class="button-row">
@@ -605,7 +389,7 @@ Licensed under the Apache License, Version 2.0.
         </div>
       </details>
 
-      <details open>
+      <details>
         <summary>インターバル録画</summary>
         <div class="details-body">
           <div class="field-row">
@@ -621,68 +405,6 @@ Licensed under the Apache License, Version 2.0.
 
     </aside>
   </main>
-
-  <section id="dataPage" class="data-page" aria-label="保存データ" hidden>
-    <aside class="session-sidebar">
-      <div class="session-sidebar-header">
-        <span id="recordingRootMeta" class="session-root">保存先を取得中…</span>
-        <button id="refreshRecordingsButton" class="btn" type="button">更新</button>
-      </div>
-      <div class="session-search"><input id="recordingSearch" type="search" placeholder="識別子・日付で絞り込み"></div>
-      <div id="recordingList" class="session-list"><div class="session-list-empty">読み込み中…</div></div>
-    </aside>
-    <div class="data-content">
-      <div id="dataEmpty" class="data-empty">左の一覧から計測セッションを選択してください。</div>
-      <article id="dataDetail" hidden>
-        <header class="data-header">
-          <div><h1 id="dataSessionTitle">—</h1><span id="dataSessionPath" class="data-path">—</span></div>
-          <button id="copySessionPathButton" class="btn" type="button">パスをコピー</button>
-        </header>
-        <div class="data-quality-grid" aria-label="保存品質">
-          <div class="quality-metric"><strong id="dataDurationMetric">—</strong><span>記録時間</span></div>
-          <div class="quality-metric"><strong id="dataFrameMetric">—</strong><span>保存フレーム</span></div>
-          <div class="quality-metric"><strong id="dataTriggerMetric">—</strong><span>基準edge</span></div>
-          <div class="quality-metric"><strong id="dataMatchedMetric">—</strong><span>同期一致</span></div>
-          <div class="quality-metric"><strong id="dataRoiMetric">—</strong><span>保存ROI</span></div>
-          <div id="dataLossMetricBox" class="quality-metric"><strong id="dataLossMetric">—</strong><span>欠損・不一致</span></div>
-        </div>
-        <section class="data-section">
-          <div class="data-section-heading"><h2>同期再生</h2><span>Frame + EVSイベント重畳</span></div>
-          <div class="playback-panel">
-            <div id="playbackPlaceholder" class="playback-placeholder">
-              <span id="playbackMessage">EVS RAWと保存フレームを同じ時刻で再生します。</span>
-              <button id="preparePlaybackButton" class="btn" type="button">再生を読み込む</button>
-            </div>
-            <div id="playbackContent" hidden>
-              <div class="playback-view">
-                <span class="playback-label">FRAME + EVS · 負 黒 / 正 白</span>
-                <img id="playbackFrameImage" alt="同期再生中のフレーム画像">
-                <img id="playbackEvsImage" class="event-overlay" alt="透明EVSイベントオーバーレイ">
-              </div>
-              <div class="playback-controls">
-                <button id="playbackPlayButton" class="btn" type="button">▶ 再生</button>
-                <input id="playbackSlider" type="range" min="0" max="0" value="0" step="1" aria-label="再生位置">
-                <span id="playbackTime" class="playback-time">0.000 / 0.000 s</span>
-                <select id="playbackSpeed" aria-label="再生速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1× 実時間</option><option value="2">2×</option><option value="4">4×</option></select>
-                <select id="playbackWindow" aria-label="EVS積算時間"><option value="10000">EVS 10 ms</option><option value="33000" selected>EVS 33 ms</option><option value="100000">EVS 100 ms</option></select>
-                <select id="playbackEvsLoad" aria-label="EVS描画負荷"><option value="light">EVS 軽量</option><option value="standard" selected>EVS 標準</option><option value="dense">EVS 高密度</option><option value="all">EVS 全描画</option></select>
-                <label class="overlay-opacity">EVS濃さ<input id="playbackOpacity" type="range" min="0.1" max="1" value="0.82" step="0.05"></label>
-              </div>
-              <div id="playbackFrameMeta" class="playback-frame-meta">—</div>
-            </div>
-          </div>
-        </section>
-        <section class="data-section">
-          <div class="data-section-heading"><h2>フレームのプレビュー</h2><span id="dataPreviewMeta">—</span></div>
-          <div id="savedPreviewGrid" class="saved-preview-grid"></div>
-        </section>
-        <section class="data-section">
-          <div class="data-section-heading"><h2>ファイル</h2><span id="dataSizeMeta">—</span></div>
-          <div id="dataFileList" class="file-list"></div>
-        </section>
-      </article>
-    </div>
-  </section>
 
   <div id="toastRegion" class="toast-region" role="status" aria-live="polite"></div>
 
@@ -704,17 +426,6 @@ Licensed under the Apache License, Version 2.0.
     let previousAutoFallbackCount = 0;
     let previousEvsPreviewFallbacks = 0;
     let previousFramePreviewFallbacks = 0;
-    let recordingSessions = [];
-    let selectedRecordingId = null;
-    let selectedRecordingPath = '';
-    let playbackManifest = null;
-    let playbackIndex = 0;
-    let playbackRunning = false;
-    let playbackAnimationFrame = null;
-    let playbackWallStart = 0;
-    let playbackTimelineStart = 0;
-    let lastPlaybackEvsMs = -Infinity;
-    let lastPlaybackEvsEpoch = null;
 
     const $ = (id) => document.getElementById(id);
 
@@ -753,295 +464,6 @@ Licensed under the Apache License, Version 2.0.
       const number = Number(rawValue);
       if (!Number.isFinite(number)) throw new Error(`${label}を入力してください。`);
       return number;
-    }
-
-    function recordsDirectoryBesideHtml() {
-      let path = decodeURIComponent(window.location.pathname || '');
-      // file:///C:/... is exposed with a leading slash even on Windows.
-      if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1);
-      const directory = path.slice(0, path.lastIndexOf('/'));
-      return directory ? `${directory}/records` : './records';
-    }
-
-    async function initializeSaveLocation() {
-      $('save_location').value = recordsDirectoryBesideHtml();
-      try {
-        const data = await requestJson(`${API.frame}/recordings`);
-        if (data.save_location) $('save_location').value = data.save_location;
-      } catch { /* サーバー起動直後はHTML位置から求めた既定値を使う */ }
-    }
-
-    function formatBytes(bytes) {
-      const value = Number(bytes) || 0;
-      if (value < 1000) return `${value} B`;
-      const units = ['KB', 'MB', 'GB', 'TB'];
-      let scaled = value;
-      let unit = 'B';
-      for (const candidate of units) {
-        scaled /= 1000;
-        unit = candidate;
-        if (scaled < 1000) break;
-      }
-      return `${scaled.toFixed(scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2)} ${unit}`;
-    }
-
-    function formatSessionDate(value) {
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return '日時不明';
-      return date.toLocaleString('ja-JP', {
-        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-        second: '2-digit', hour12: false
-      });
-    }
-
-    function setActivePage(page) {
-      const showData = page === 'data';
-      $('capturePage').hidden = showData;
-      $('dataPage').hidden = !showData;
-      $('captureTabButton').classList.toggle('active', !showData);
-      $('dataTabButton').classList.toggle('active', showData);
-      $('captureTabButton').toggleAttribute('aria-current', !showData);
-      $('dataTabButton').toggleAttribute('aria-current', showData);
-      if (showData) loadRecordings();
-      else pausePlayback();
-    }
-
-    function renderRecordingList() {
-      const query = value('recordingSearch').toLowerCase();
-      const filtered = recordingSessions.filter((session) =>
-        `${session.session_id} ${session.started_utc}`.toLowerCase().includes(query));
-      $('recordingList').replaceChildren();
-      if (!filtered.length) {
-        const empty = document.createElement('div');
-        empty.className = 'session-list-empty';
-        empty.textContent = recordingSessions.length ? '条件に一致するセッションはありません。' : '保存済みセッションはありません。';
-        $('recordingList').appendChild(empty);
-        return;
-      }
-      for (const session of filtered) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = `session-item${session.session_id === selectedRecordingId ? ' active' : ''}`;
-        const heading = document.createElement('span');
-        heading.className = 'session-item-heading';
-        const title = document.createElement('strong');
-        title.textContent = session.session_id;
-        const date = document.createElement('time');
-        date.textContent = formatSessionDate(session.started_utc);
-        heading.append(title, date);
-        const meta = document.createElement('span');
-        meta.className = 'session-item-meta';
-        meta.textContent = `${Number(session.duration_seconds || 0).toFixed(1)} s · ${session.saved_frames || 0} frames · edge ${session.reference_edges || 0}`;
-        const badge = document.createElement('span');
-        const lossTotal = Number(session.losses?.total || 0);
-        badge.className = `quality-badge${lossTotal ? ' loss' : (!session.complete ? ' incomplete' : '')}`;
-        badge.textContent = lossTotal ? `要確認 ${lossTotal}件` : (session.complete ? '欠損なし' : '記録未完了');
-        button.append(heading, meta, badge);
-        button.addEventListener('click', () => selectRecording(session.session_id));
-        $('recordingList').appendChild(button);
-      }
-    }
-
-    async function loadRecordings() {
-      $('recordingRootMeta').textContent = '保存先を読み込み中…';
-      try {
-        const data = await requestJson(`${API.frame}/recordings`);
-        recordingSessions = data.sessions || [];
-        $('recordingRootMeta').textContent = `${data.save_location} · ${recordingSessions.length} セッション`;
-        renderRecordingList();
-        const selectedStillExists = recordingSessions.some((item) => item.session_id === selectedRecordingId);
-        if (!selectedStillExists) selectedRecordingId = null;
-        if (!selectedRecordingId && recordingSessions.length) {
-          await selectRecording(recordingSessions[0].session_id);
-        } else if (!recordingSessions.length) {
-          $('dataEmpty').hidden = false;
-          $('dataDetail').hidden = true;
-        }
-      } catch (error) {
-        $('recordingRootMeta').textContent = '保存先を取得できません';
-        $('recordingList').replaceChildren();
-        const empty = document.createElement('div');
-        empty.className = 'session-list-empty';
-        empty.textContent = error.message;
-        $('recordingList').appendChild(empty);
-      }
-    }
-
-    function pausePlayback() {
-      playbackRunning = false;
-      if (playbackAnimationFrame !== null) window.cancelAnimationFrame(playbackAnimationFrame);
-      playbackAnimationFrame = null;
-      $('playbackPlayButton').textContent = '▶ 再生';
-    }
-
-    function resetPlayback() {
-      pausePlayback();
-      playbackManifest = null;
-      playbackIndex = 0;
-      lastPlaybackEvsMs = -Infinity;
-      lastPlaybackEvsEpoch = null;
-      $('playbackPlaceholder').hidden = false;
-      $('playbackContent').hidden = true;
-      $('playbackMessage').textContent = 'EVS RAWと保存フレームを同じ時刻で再生します。';
-      $('preparePlaybackButton').hidden = false;
-      $('playbackEvsImage').removeAttribute('src');
-      $('playbackFrameImage').removeAttribute('src');
-    }
-
-    function playbackEvsSettings() {
-      return {
-        light: { fps: 5, maxEvents: 20000 },
-        standard: { fps: 10, maxEvents: 50000 },
-        dense: { fps: 15, maxEvents: 100000 },
-        all: { fps: 0, maxEvents: 0 }
-      }[$('playbackEvsLoad').value] || { fps: 10, maxEvents: 50000 };
-    }
-
-    function renderPlaybackFrame(index, forceEvs = false) {
-      if (!playbackManifest?.frames?.length) return;
-      playbackIndex = Math.max(0, Math.min(Number(index) || 0, playbackManifest.frames.length - 1));
-      const frame = playbackManifest.frames[playbackIndex];
-      const sessionId = playbackManifest.session_id;
-      const windowUs = Number($('playbackWindow').value) || playbackManifest.event_window_us || 33000;
-      $('playbackSlider').value = playbackIndex;
-      $('playbackFrameImage').src = `${API.frame}/recordings/${encodeURIComponent(sessionId)}/preview/${encodeURIComponent(frame.filename)}`;
-      const evsSettings = playbackEvsSettings();
-      const evsIntervalMs = evsSettings.fps ? 1000 / evsSettings.fps : 0;
-      const updateEvs = forceEvs || !playbackRunning || frame.stream_epoch !== lastPlaybackEvsEpoch ||
-        frame.relative_ms - lastPlaybackEvsMs >= evsIntervalMs - 0.5;
-      if (updateEvs) {
-        $('playbackEvsImage').src = `${API.frame}/recordings/${encodeURIComponent(sessionId)}/events/${frame.stream_epoch}/${frame.raw_time_us}.png?window_us=${windowUs}&width=960&max_events=${evsSettings.maxEvents}`;
-        lastPlaybackEvsMs = frame.relative_ms;
-        lastPlaybackEvsEpoch = frame.stream_epoch;
-      }
-      $('playbackTime').textContent = `${(frame.relative_ms / 1000).toFixed(3)} / ${(playbackManifest.duration_ms / 1000).toFixed(3)} s`;
-      $('playbackFrameMeta').textContent =
-        `seq ${String(frame.sequence).padStart(6, '0')} · camera ID ${frame.camera_frame_id || '—'} · ` +
-        `EVS ${frame.raw_time_us} µs · epoch ${frame.stream_epoch}`;
-    }
-
-    function playbackTick(now) {
-      if (!playbackRunning || !playbackManifest) return;
-      const speed = Number($('playbackSpeed').value) || 1;
-      const targetMs = playbackTimelineStart + (now - playbackWallStart) * speed;
-      const frames = playbackManifest.frames;
-      let nextIndex = playbackIndex;
-      while (nextIndex + 1 < frames.length && frames[nextIndex + 1].relative_ms <= targetMs) {
-        nextIndex += 1;
-      }
-      if (nextIndex !== playbackIndex) renderPlaybackFrame(nextIndex);
-      if (playbackIndex >= frames.length - 1 && targetMs >= playbackManifest.duration_ms) {
-        pausePlayback();
-        return;
-      }
-      playbackAnimationFrame = window.requestAnimationFrame(playbackTick);
-    }
-
-    function togglePlayback() {
-      if (!playbackManifest?.frames?.length) return;
-      if (playbackRunning) {
-        pausePlayback();
-        return;
-      }
-      if (playbackIndex >= playbackManifest.frames.length - 1) renderPlaybackFrame(0);
-      playbackRunning = true;
-      playbackWallStart = performance.now();
-      playbackTimelineStart = playbackManifest.frames[playbackIndex].relative_ms;
-      $('playbackPlayButton').textContent = 'Ⅱ 一時停止';
-      playbackAnimationFrame = window.requestAnimationFrame(playbackTick);
-    }
-
-    async function preparePlayback() {
-      if (!selectedRecordingId) throw new Error('再生するセッションを選択してください。');
-      pausePlayback();
-      $('playbackMessage').textContent = '同期時刻とEVS RAWを読み込み中…';
-      $('preparePlaybackButton').hidden = true;
-      try {
-        const data = await requestJson(
-          `${API.frame}/recordings/${encodeURIComponent(selectedRecordingId)}/playback`);
-        if (selectedRecordingId !== data.playback.session_id) return;
-        playbackManifest = data.playback;
-        playbackIndex = 0;
-        $('playbackSlider').max = Math.max(0, playbackManifest.frames.length - 1);
-        $('playbackPlaceholder').hidden = true;
-        $('playbackContent').hidden = false;
-        renderPlaybackFrame(0, true);
-      } catch (error) {
-        $('playbackMessage').textContent = error.message;
-        $('preparePlaybackButton').hidden = false;
-        throw error;
-      }
-    }
-
-    async function selectRecording(sessionId) {
-      if (selectedRecordingId !== sessionId) resetPlayback();
-      selectedRecordingId = sessionId;
-      renderRecordingList();
-      $('dataEmpty').hidden = false;
-      $('dataEmpty').textContent = 'セッションを読み込み中…';
-      $('dataDetail').hidden = true;
-      try {
-        const data = await requestJson(`${API.frame}/recordings/${encodeURIComponent(sessionId)}`);
-        if (selectedRecordingId !== sessionId) return;
-        const session = data.session;
-        const frame = session.frame || {};
-        const sync = session.synchronization || {};
-        const losses = session.losses || {};
-        const roi = session.recording_roi || {};
-        selectedRecordingPath = session.path || '';
-        $('dataSessionTitle').textContent = session.session_id;
-        $('dataSessionPath').textContent = selectedRecordingPath;
-        $('dataDurationMetric').textContent = `${Number(session.duration_seconds || 0).toFixed(1)} s`;
-        $('dataFrameMetric').textContent = frame.saved_frames || 0;
-        $('dataTriggerMetric').textContent = sync.reference_trigger_edges || 0;
-        $('dataMatchedMetric').textContent = `${sync.matched || 0} / ${sync.reference_trigger_edges || 0}`;
-        $('dataRoiMetric').textContent = roi.width && roi.height ? `${roi.width}×${roi.height}` : '—';
-        $('dataLossMetric').textContent = losses.total || 0;
-        $('dataLossMetricBox').classList.toggle('alert', Boolean(losses.total));
-        $('dataPreviewMeta').textContent = `先頭 ${session.preview_images.length} 枚 / ${frame.saved_frames || 0}`;
-        $('dataSizeMeta').textContent = `合計 ${formatBytes(session.total_size_bytes)}`;
-        $('savedPreviewGrid').replaceChildren();
-        for (const filename of session.preview_images) {
-          const figure = document.createElement('div');
-          figure.className = 'saved-preview';
-          const image = document.createElement('img');
-          image.loading = 'lazy';
-          image.alt = `${session.session_id} · ${filename}`;
-          image.src = `${API.frame}/recordings/${encodeURIComponent(session.session_id)}/preview/${encodeURIComponent(filename)}`;
-          image.addEventListener('click', () => {
-            $('dialogVideo').src = image.src;
-            $('dialogTitle').textContent = image.alt;
-            dialog.showModal();
-          });
-          const caption = document.createElement('span');
-          caption.textContent = filename;
-          figure.append(image, caption);
-          $('savedPreviewGrid').appendChild(figure);
-        }
-        if (!session.preview_images.length) {
-          const empty = document.createElement('div');
-          empty.className = 'session-list-empty';
-          empty.textContent = 'プレビュー可能なPGM画像がありません。';
-          $('savedPreviewGrid').appendChild(empty);
-        }
-        $('dataFileList').replaceChildren(...session.files.map((file) => {
-          const row = document.createElement('div');
-          row.className = 'file-row';
-          const path = document.createElement('span');
-          path.textContent = file.path;
-          const count = document.createElement('span');
-          count.textContent = file.count === null || file.count === undefined ? '—' : `${file.count.toLocaleString()} ${file.path.includes('*') ? 'files' : file.path.endsWith('.csv') ? 'rows' : 'file'}`;
-          const size = document.createElement('span');
-          size.textContent = formatBytes(file.size_bytes);
-          row.append(path, count, size);
-          return row;
-        }));
-        $('dataEmpty').hidden = true;
-        $('dataDetail').hidden = false;
-      } catch (error) {
-        $('dataEmpty').textContent = error.message;
-        showToast(error.message, 'error');
-      }
     }
 
     async function updateSave() {
@@ -1434,39 +856,9 @@ Licensed under the Apache License, Version 2.0.
       button.addEventListener('click', () => runAction(button, actions[button.dataset.action]));
     });
 
-    $('captureTabButton').addEventListener('click', () => setActivePage('capture'));
-    $('dataTabButton').addEventListener('click', () => setActivePage('data'));
-    $('recordingSearch').addEventListener('input', renderRecordingList);
-    $('refreshRecordingsButton').addEventListener('click', () =>
-      runAction($('refreshRecordingsButton'), loadRecordings));
-    $('copySessionPathButton').addEventListener('click', async () => {
-      if (!selectedRecordingPath) return;
-      try {
-        await navigator.clipboard.writeText(selectedRecordingPath);
-        showToast('セッションのパスをコピーしました。');
-      } catch {
-        showToast('パスをコピーできませんでした。表示されたパスを選択してください。', 'error');
-      }
-    });
-    $('preparePlaybackButton').addEventListener('click', () =>
-      runAction($('preparePlaybackButton'), preparePlayback));
-    $('playbackPlayButton').addEventListener('click', togglePlayback);
-    $('playbackSlider').addEventListener('input', () => {
-      pausePlayback();
-      renderPlaybackFrame(Number($('playbackSlider').value), true);
-    });
-    $('playbackSpeed').addEventListener('change', () => {
-      if (!playbackRunning || !playbackManifest) return;
-      playbackWallStart = performance.now();
-      playbackTimelineStart = playbackManifest.frames[playbackIndex].relative_ms;
-    });
-    $('playbackWindow').addEventListener('change', () => renderPlaybackFrame(playbackIndex, true));
-    $('playbackEvsLoad').addEventListener('change', () => {
-      lastPlaybackEvsMs = -Infinity;
-      renderPlaybackFrame(playbackIndex, true);
-    });
-    $('playbackOpacity').addEventListener('input', () => {
-      $('playbackEvsImage').style.opacity = $('playbackOpacity').value;
+    $('layoutButton').addEventListener('click', () => {
+      const vertical = $('videoGrid').classList.toggle('vertical');
+      $('layoutButton').textContent = vertical ? '横に並べる' : '縦に並べる';
     });
 
     const dialog = $('videoDialog');
@@ -1493,7 +885,8 @@ Licensed under the Apache License, Version 2.0.
     dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
     dialog.addEventListener('close', () => { $('dialogVideo').removeAttribute('src'); });
 
-    initializeSaveLocation();
+    const pageDirectory = decodeURIComponent(window.location.pathname.slice(0, window.location.pathname.lastIndexOf('/')));
+    $('save_location').value = pageDirectory || '.';
     updateRecordingUi(false);
     refreshFrameSettings();
     loadTriggerOptions();

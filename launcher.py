@@ -8,6 +8,7 @@ import webbrowser
 import time
 import importlib.util
 import os
+from pathlib import Path
 import sys
 
 
@@ -63,16 +64,29 @@ def main():
     evs_script = os.path.join(base_dir, "evsStreamer.py")
     frame_script = os.path.join(base_dir, "frameStreamer.py")
     html_file = os.path.join(base_dir, "bothViewer.html")
-    
-    commands = {
-        "EVS": [sys.executable, evs_script, "--port", "5001"],
-        "Frame": [sys.executable, frame_script, "--port", "5002"],
-    }
+
+    def build_commands():
+        # Import only after dependency validation so a missing PyYAML still
+        # produces the launcher's consolidated installation guidance.
+        from config_manager import load_config, resolve_recording_directory
+        config = load_config()
+        configured = config.get("recording", {}).get("save_location", "./records")
+        save_location = resolve_recording_directory(
+            configured, application_directory=base_dir)
+        os.makedirs(save_location, exist_ok=True)
+        return {
+            "EVS": [sys.executable, evs_script, "--port", "5001",
+                    "--save_location", save_location],
+            "Frame": [sys.executable, frame_script, "--port", "5002",
+                      "--save_location", save_location],
+        }
+
+    commands = build_commands()
     processes = {name: subprocess.Popen(command) for name, command in commands.items()}
     
     time.sleep(5)
     
-    html_url = "file://" + html_file
+    html_url = Path(html_file).as_uri()
     webbrowser.open(html_url)
     
     print("サーバーを起動しました。CTRL+C で終了します。")
@@ -87,6 +101,7 @@ def main():
                         file=sys.stderr,
                     )
                     time.sleep(1)
+                    commands = build_commands()
                     processes[name] = subprocess.Popen(commands[name])
             time.sleep(0.5)
     except KeyboardInterrupt:
