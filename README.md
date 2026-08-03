@@ -58,6 +58,10 @@ The recording panel shows incomplete frames, ID gaps, queue drops, and write fai
 
 Stopping a session first closes frame acceptance, then stops EVS while the frame writer drains in the background. `duration_seconds` therefore reports the actual capture interval; `writer_drain_seconds` separately reports post-capture save time. The GUI also reports measured save fps and MB/s. A manual **EVSを再接続** control is available; during recording, reconnection continues into a new EVS RAW segment.
 
+The EVS view includes a live Trigger In monitor even when no recording is active. It shows recent activity, the reference-edge frequency and period, cumulative rising/falling edges, and the age and polarity of the latest edge. Frequency history resets after EVS reconnection so timestamps from different sensor epochs are never mixed.
+
+The frame view has a corresponding external-trigger monitor. When external drive is enabled it shows the selected input line and activation edge, complete/incomplete trigger-driven frame callbacks, measured frame frequency, latest-frame age, and the `Line0 ExposureActive -> EVS Trigger In` synchronization state. Thus an external input starts the frame exposure, and that exposure simultaneously produces the timing edge recorded by EVS.
+
 The frame camera is configured with a hardware ROI matching the EVS sensor's physical field of view (1800×1012 at the default sensor specifications, with the configured frame shift applied). This avoids transferring the unused border pixels. If the camera rejects hardware ROI control, the application restores full-sensor acquisition and automatically falls back to the same software crop. The actual mode, size, and sensor offset are stored in `camera_settings.json`, `frame_summary.json`, `/status`, and the frame audit CSV.
 
 ## Trigger topology

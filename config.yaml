@@ -30,7 +30,7 @@ frameCam:
     outputInverter: true
     outputLine: Line0
     source: Line1
-  frameRate: 100.0
+  frameRate: 30.000001907348633
   gain:
     mode: Manual
     value: 0

@@ -91,6 +91,23 @@ class FakeEventsStream:
         self.stopped = True
 
 
+class FakeTriggerReader:
+    def __init__(self):
+        self.cleared = False
+
+    def clear_ext_trigger_events(self):
+        self.cleared = True
+
+
+class FakeTriggerIterator:
+    def __init__(self, events):
+        self.events = events
+        self.reader = FakeTriggerReader()
+
+    def get_ext_trigger_events(self):
+        return self.events
+
+
 class FakeTriggerCamera:
     def __init__(self):
         for name in (
@@ -166,6 +183,31 @@ class RecordingAuditTests(unittest.TestCase):
         self.assertTrue(streamer.events_stream.stopped)
         self.assertTrue(streamer.reconnect_wakeup.is_set())
 
+    def test_trigger_monitor_counts_edges_and_reports_reference_frequency(self):
+        streamer = EVSStreamer.__new__(EVSStreamer)
+        streamer.initialize_trigger_monitor()
+        streamer.trigger_in = True
+        streamer.recording = False
+        streamer.recording_lock = threading.RLock()
+        streamer.trigger_writer = None
+        streamer.mv_iterator = FakeTriggerIterator([
+            {"t": 0, "p": 1, "id": 0},
+            {"t": 500, "p": 0, "id": 0},
+            {"t": 10_000, "p": 1, "id": 0},
+            {"t": 10_500, "p": 0, "id": 0},
+        ])
+
+        streamer.record_trigger_events()
+        status = streamer.trigger_monitor_status()
+
+        self.assertTrue(status["active"])
+        self.assertEqual(status["edge_count"], 4)
+        self.assertEqual(status["rising_edges"], 2)
+        self.assertEqual(status["falling_edges"], 2)
+        self.assertEqual(status["rising_hz"], 100.0)
+        self.assertEqual(status["falling_period_ms"], 10.0)
+        self.assertTrue(streamer.mv_iterator.reader.cleared)
+
     def test_bandwidth_preset_restarts_stream_and_reports_limit(self):
         camera_thread = CameraThread()
         camera_thread.cam = FakeStreamingCamera()
@@ -224,6 +266,24 @@ class RecordingAuditTests(unittest.TestCase):
         self.assertEqual(camera.LineMode.get(), "Output")
         self.assertEqual(camera.LineSource.get(), "ExposureActive")
         self.assertTrue(camera.LineInverter.get())
+
+    def test_external_trigger_monitor_reports_driven_frames(self):
+        camera_thread = CameraThread(trigger_enabled=True)
+        now_ns = time.monotonic_ns()
+        camera_thread.record_external_trigger_result(
+            now_ns - 20_000_000, True, "FrameStatus.Complete")
+        camera_thread.record_external_trigger_result(
+            now_ns - 10_000_000, False, "FrameStatus.Incomplete")
+
+        status = camera_thread.external_trigger_monitor_status()
+
+        self.assertTrue(status["enabled"])
+        self.assertTrue(status["active"])
+        self.assertEqual(status["callback_frames"], 2)
+        self.assertEqual(status["complete_frames"], 1)
+        self.assertEqual(status["incomplete_frames"], 1)
+        self.assertEqual(status["measured_hz"], 100.0)
+        self.assertEqual(status["evs_output_source"], "ExposureActive")
 
     def test_image_writer_preserves_8_bit_bayer_values(self):
         with tempfile.TemporaryDirectory() as root:

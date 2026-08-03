@@ -125,6 +125,12 @@ Licensed under the Apache License, Version 2.0.
     .stream-stage img { display: block; width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
     .stream-hint { position: absolute; right: 10px; bottom: 10px; padding: 4px 8px; border-radius: 7px; background: rgba(3,5,7,.70); color: #cbd5e1; font-size: 11px; opacity: 0; transition: opacity .15s; pointer-events: none; }
     .stream-stage:hover .stream-hint { opacity: 1; }
+    .trigger-monitor { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; border-top: 1px solid var(--border); background: var(--border); }
+    .trigger-monitor-item { min-width: 0; padding: 8px 10px; background: #0d131c; }
+    .trigger-monitor-item span { display: block; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+    .trigger-monitor-item strong { display: block; overflow: hidden; margin-top: 2px; font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+    .trigger-monitor-item .trigger-state { display: flex; align-items: center; gap: 7px; margin-top: 3px; color: var(--text); }
+    .trigger-monitor.inactive .trigger-monitor-item { opacity: .55; }
 
     .control-panel { min-width: 0; }
     .control-heading { display: flex; align-items: center; justify-content: space-between; min-height: 40px; margin-bottom: 12px; }
@@ -200,6 +206,7 @@ Licensed under the Apache License, Version 2.0.
       .record-panel-heading { align-items: stretch; flex-direction: column; }
       .record-actions { display: grid; grid-template-columns: 1fr 1fr; }
       .viewer-record-panel .quality-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .trigger-monitor { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .toast-region { top: 72px; right: 16px; }
     }
   </style>
@@ -236,6 +243,12 @@ Licensed under the Apache License, Version 2.0.
             <img id="evsVideo" src="http://127.0.0.1:5001/video_feed" alt="イベントカメラのライブ映像">
             <span class="stream-hint">クリックで拡大</span>
           </div>
+          <div class="trigger-monitor" aria-label="EVS Trigger Inモニター">
+            <div class="trigger-monitor-item"><span>EVS Trigger In</span><strong class="trigger-state"><i id="triggerActivityDot" class="status-dot"></i><b id="triggerActivityText">待機中</b></strong></div>
+            <div class="trigger-monitor-item"><span>基準edge</span><strong id="triggerRateText">— Hz · — ms</strong></div>
+            <div class="trigger-monitor-item"><span>立上り / 立下り</span><strong id="triggerCountsText">0 / 0</strong></div>
+            <div class="trigger-monitor-item"><span>最終edge</span><strong id="triggerLastText">未受信</strong></div>
+          </div>
         </article>
         <article class="video-card">
           <header class="video-card-header">
@@ -245,6 +258,12 @@ Licensed under the Apache License, Version 2.0.
           <div class="stream-stage">
             <img id="frameVideo" src="http://127.0.0.1:5002/video_feed" alt="フレームカメラのライブ映像">
             <span class="stream-hint">クリックで拡大</span>
+          </div>
+          <div id="frameTriggerPanel" class="trigger-monitor inactive" aria-label="フレームカメラ外部トリガーモニター">
+            <div class="trigger-monitor-item"><span>外部Trigger駆動</span><strong class="trigger-state"><i id="frameTriggerActivityDot" class="status-dot"></i><b id="frameTriggerActivityText">フリーラン</b></strong></div>
+            <div class="trigger-monitor-item"><span>入力条件</span><strong id="frameTriggerInputText">—</strong></div>
+            <div class="trigger-monitor-item"><span>Frame受信（完了 / 不完全）</span><strong id="frameTriggerFramesText">0 / 0 · — Hz</strong></div>
+            <div class="trigger-monitor-item"><span>Frame → EVS同期</span><strong id="frameToEvsTriggerText">Line0 → Trigger In</strong></div>
           </div>
         </article>
       </div>
@@ -671,6 +690,8 @@ Licensed under the Apache License, Version 2.0.
         }
         const evsQuality = checks[0].value.recording_quality || {};
         const frameQuality = checks[1].value.recording_quality || {};
+        const triggerMonitor = checks[0].value.trigger_monitor || {};
+        const frameTriggerMonitor = checks[1].value.external_trigger_monitor || {};
         const bandwidth = checks[1].value.bandwidth || {};
         const recordingRoi = checks[1].value.recording_roi || {};
         if (bandwidth.preset && document.activeElement !== $('bandwidth_preset')) {
@@ -696,6 +717,51 @@ Licensed under the Apache License, Version 2.0.
         $('triggerMetric').textContent = checks[1].value.camera_settings?.LineInverter
           ? (evsQuality.falling_edges || 0)
           : (evsQuality.rising_edges || 0);
+        const referenceIsFalling = Boolean(checks[1].value.camera_settings?.LineInverter);
+        const triggerRate = Number(referenceIsFalling
+          ? triggerMonitor.falling_hz : triggerMonitor.rising_hz) || 0;
+        const triggerPeriod = referenceIsFalling
+          ? triggerMonitor.falling_period_ms : triggerMonitor.rising_period_ms;
+        $('triggerActivityDot').classList.toggle('online', Boolean(triggerMonitor.active));
+        $('triggerActivityText').textContent = !triggerMonitor.enabled
+          ? '無効' : (triggerMonitor.active ? '受信中' : '待機中');
+        $('triggerRateText').textContent = triggerRate
+          ? `${triggerMonitor.active ? '' : '最終 '}${triggerRate.toFixed(2)} Hz · ${Number(triggerPeriod).toFixed(2)} ms`
+          : '— Hz · — ms';
+        $('triggerCountsText').textContent =
+          `${triggerMonitor.rising_edges || 0} / ${triggerMonitor.falling_edges || 0}`;
+        const lastPolarity = triggerMonitor.last_polarity === 1
+          ? '立上り' : (triggerMonitor.last_polarity === 0 ? '立下り' : '未受信');
+        const edgeAgeValue = triggerMonitor.last_edge_age_ms;
+        const edgeAge = Number(edgeAgeValue);
+        $('triggerLastText').textContent = edgeAgeValue !== null && edgeAgeValue !== undefined && Number.isFinite(edgeAge)
+          ? `${lastPolarity} · ${edgeAge.toFixed(0)} ms前` : lastPolarity;
+        const frameTriggerEnabled = Boolean(frameTriggerMonitor.enabled);
+        const frameTriggerActive = Boolean(frameTriggerMonitor.active);
+        const frameTriggerAgeValue = frameTriggerMonitor.last_frame_age_ms;
+        const frameTriggerAge = Number(frameTriggerAgeValue);
+        const frameTriggerAgeText = frameTriggerAgeValue !== null && frameTriggerAgeValue !== undefined && Number.isFinite(frameTriggerAge)
+          ? ` · ${frameTriggerAge.toFixed(0)} ms前` : '';
+        const activationSymbol = {
+          RisingEdge: '↑ RisingEdge', FallingEdge: '↓ FallingEdge', AnyEdge: '↕ AnyEdge'
+        }[frameTriggerMonitor.activation] || frameTriggerMonitor.activation || '—';
+        $('frameTriggerPanel').classList.toggle('inactive', !frameTriggerEnabled);
+        $('frameTriggerActivityDot').classList.toggle('online', frameTriggerActive);
+        $('frameTriggerActivityText').textContent = !frameTriggerEnabled
+          ? 'フリーラン' : (frameTriggerActive ? `受信中${frameTriggerAgeText}` : '入力待ち');
+        $('frameTriggerInputText').textContent = frameTriggerEnabled
+          ? `${frameTriggerMonitor.source || '—'} · ${activationSymbol}` : '外部Trigger OFF';
+        const frameTriggerHz = Number(frameTriggerMonitor.measured_hz) || 0;
+        $('frameTriggerFramesText').textContent =
+          `${frameTriggerMonitor.complete_frames || 0} / ${frameTriggerMonitor.incomplete_frames || 0} · ` +
+          (frameTriggerHz ? `${frameTriggerHz.toFixed(2)} Hz` : '— Hz');
+        const evsReferenceHz = referenceIsFalling
+          ? Number(triggerMonitor.falling_hz) : Number(triggerMonitor.rising_hz);
+        const frameToEvsActive = frameTriggerEnabled && frameTriggerActive && Boolean(triggerMonitor.active);
+        $('frameToEvsTriggerText').textContent = frameTriggerEnabled
+          ? `${frameTriggerMonitor.evs_output_line || 'Line0'} ExposureActive → EVS · ` +
+            (frameToEvsActive ? `${(evsReferenceHz || 0).toFixed(2)} Hz` : '待機')
+          : 'Line0 ExposureActive → EVS';
         $('queueMetric').textContent = frameQuality.queue_depth || 0;
         $('saveFpsMetric').textContent = Number(frameQuality.save_fps || 0).toFixed(1);
         $('writeRateMetric').textContent = Number(

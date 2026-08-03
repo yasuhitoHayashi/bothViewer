@@ -4,6 +4,7 @@
 Licensed under the Apache License, Version 2.0.
 """
 import argparse
+from collections import deque
 import csv
 import json
 import os
@@ -257,6 +258,7 @@ class EVSStreamer:
         self.recording_raw_files = []
         self.raw_segment_index = 0
         self.recording_reconnect_baseline = 0
+        self.initialize_trigger_monitor()
 
         # 固定パラメータ（累積時間、FPS）
         self.fixed_accumulation_time_ms = 33
@@ -288,6 +290,63 @@ class EVSStreamer:
         self.event_frame_gen.set_colors(
             background_color=[128], on_color=[255], off_color=[0], colored=False)
         self.event_frame_gen.set_output_callback(self.on_cd_frame_cb)
+
+    def initialize_trigger_monitor(self):
+        self.trigger_monitor_lock = threading.Lock()
+        self.live_trigger_count = 0
+        self.live_trigger_rising_count = 0
+        self.live_trigger_falling_count = 0
+        self.live_trigger_last_polarity = None
+        self.live_trigger_last_sensor_timestamp_us = None
+        self.live_trigger_last_host_monotonic_ns = None
+        self.live_trigger_recent_timestamps = {
+            0: deque(maxlen=120),
+            1: deque(maxlen=120),
+        }
+
+    def reset_trigger_monitor_timing(self):
+        """再接続によるセンサー時刻基準の変化を周波数計算へ混ぜない。"""
+        with self.trigger_monitor_lock:
+            self.live_trigger_recent_timestamps[0].clear()
+            self.live_trigger_recent_timestamps[1].clear()
+            self.live_trigger_last_sensor_timestamp_us = None
+            self.live_trigger_last_host_monotonic_ns = None
+
+    def trigger_monitor_status(self):
+        with self.trigger_monitor_lock:
+            now_ns = time.monotonic_ns()
+            age_ms = (
+                (now_ns - self.live_trigger_last_host_monotonic_ns) / 1e6
+                if self.live_trigger_last_host_monotonic_ns is not None else None)
+
+            def frequency(polarity):
+                timestamps = self.live_trigger_recent_timestamps[polarity]
+                if len(timestamps) < 2 or timestamps[-1] <= timestamps[0]:
+                    return 0.0
+                return (len(timestamps) - 1) * 1_000_000 / (timestamps[-1] - timestamps[0])
+
+            rising_hz = frequency(1)
+            falling_hz = frequency(0)
+            observed_period_ms = max(
+                1000 / rising_hz if rising_hz else 0,
+                1000 / falling_hz if falling_hz else 0,
+            )
+            active_timeout_ms = max(2000, min(30_000, observed_period_ms * 3))
+            return {
+                "enabled": bool(self.trigger_in),
+                "active": bool(age_ms is not None and age_ms <= active_timeout_ms),
+                "active_timeout_ms": round(active_timeout_ms, 1),
+                "edge_count": self.live_trigger_count,
+                "rising_edges": self.live_trigger_rising_count,
+                "falling_edges": self.live_trigger_falling_count,
+                "rising_hz": round(rising_hz, 3),
+                "falling_hz": round(falling_hz, 3),
+                "rising_period_ms": round(1000 / rising_hz, 3) if rising_hz else None,
+                "falling_period_ms": round(1000 / falling_hz, 3) if falling_hz else None,
+                "last_polarity": self.live_trigger_last_polarity,
+                "last_sensor_timestamp_us": self.live_trigger_last_sensor_timestamp_us,
+                "last_edge_age_ms": round(age_ms, 1) if age_ms is not None else None,
+            }
 
     def record_connection_event(self, event, message):
         with self.recording_lock:
@@ -322,6 +381,7 @@ class EVSStreamer:
         self.bias_interface = device.get_i_ll_biases()
         self.events_stream = device.get_i_events_stream()
         self.mv_iterator = iterator
+        self.reset_trigger_monitor_timing()
         if (width, height) != (self.orig_width, self.orig_height):
             self.orig_width, self.orig_height = width, height
             self.configure_event_frame_generator()
@@ -439,11 +499,25 @@ class EVSStreamer:
 
         host_utc_ns = time.time_ns()
         host_monotonic_ns = time.monotonic_ns()
+        decoded_events = [
+            (int(event["t"]), int(event["p"]), int(event["id"]))
+            for event in trigger_events
+        ]
+        with self.trigger_monitor_lock:
+            for sensor_timestamp, polarity, _channel_id in decoded_events:
+                self.live_trigger_count += 1
+                if polarity:
+                    self.live_trigger_rising_count += 1
+                else:
+                    self.live_trigger_falling_count += 1
+                self.live_trigger_recent_timestamps[polarity].append(sensor_timestamp)
+                self.live_trigger_last_polarity = polarity
+                self.live_trigger_last_sensor_timestamp_us = sensor_timestamp
+                self.live_trigger_last_host_monotonic_ns = host_monotonic_ns
+
         with self.recording_lock:
             if self.recording and self.trigger_writer is not None:
-                for event in trigger_events:
-                    sensor_timestamp = int(event["t"])
-                    polarity = int(event["p"])
+                for sensor_timestamp, polarity, channel_id in decoded_events:
                     sensor_delta_us = None
                     if self.previous_trigger_timestamp is not None:
                         sensor_delta_us = sensor_timestamp - self.previous_trigger_timestamp
@@ -455,7 +529,7 @@ class EVSStreamer:
                         "evs_timestamp_us": sensor_timestamp,
                         "sensor_delta_us": sensor_delta_us,
                         "polarity": polarity,
-                        "channel_id": int(event["id"]),
+                        "channel_id": channel_id,
                         "host_decode_utc_ns": host_utc_ns,
                         "host_decode_monotonic_ns": host_monotonic_ns,
                     })
@@ -779,6 +853,7 @@ def status():
         "frame_ready": bool(evs_streamer_instance and evs_streamer_instance.latest_frame_jpeg),
         "recording": bool(evs_streamer_instance and evs_streamer_instance.recording),
         "trigger_in": bool(evs_streamer_instance and evs_streamer_instance.trigger_in),
+        "trigger_monitor": evs_streamer_instance.trigger_monitor_status(),
         "connection": {
             "state": evs_streamer_instance.connection_state,
             "restart_attempts": evs_streamer_instance.reconnect_attempts,

@@ -252,10 +252,64 @@ class CameraThread(threading.Thread):
         self.last_callback_monotonic_ns = None
         self.callback_timestamps_ns = deque(maxlen=120)
         self.control_requests = queue.Queue()
+        self.external_trigger_monitor_lock = threading.Lock()
+        self.reset_external_trigger_monitor()
         self.roi_configuration = {
             "mode": "not_configured",
             **calculate_evs_matching_frame_roi(),
         }
+
+    def reset_external_trigger_monitor(self):
+        with self.external_trigger_monitor_lock:
+            self.external_trigger_callback_count = 0
+            self.external_trigger_complete_count = 0
+            self.external_trigger_incomplete_count = 0
+            self.external_trigger_last_status = None
+            self.external_trigger_last_host_monotonic_ns = None
+            self.external_trigger_recent_timestamps_ns = deque(maxlen=120)
+
+    def record_external_trigger_result(self, host_monotonic_ns, complete, frame_status):
+        if not self.external_trigger_enabled:
+            return
+        with self.external_trigger_monitor_lock:
+            self.external_trigger_callback_count += 1
+            if complete:
+                self.external_trigger_complete_count += 1
+            else:
+                self.external_trigger_incomplete_count += 1
+            self.external_trigger_last_status = str(frame_status)
+            self.external_trigger_last_host_monotonic_ns = host_monotonic_ns
+            self.external_trigger_recent_timestamps_ns.append(host_monotonic_ns)
+
+    def external_trigger_monitor_status(self):
+        with self.external_trigger_monitor_lock:
+            timestamps = self.external_trigger_recent_timestamps_ns
+            measured_hz = 0.0
+            if len(timestamps) >= 2 and timestamps[-1] > timestamps[0]:
+                measured_hz = (len(timestamps) - 1) * 1e9 / (timestamps[-1] - timestamps[0])
+            period_ms = 1000 / measured_hz if measured_hz else None
+            age_ms = (
+                (time.monotonic_ns() - self.external_trigger_last_host_monotonic_ns) / 1e6
+                if self.external_trigger_last_host_monotonic_ns is not None else None)
+            active_timeout_ms = max(2000, min(30_000, (period_ms or 0) * 3))
+            return {
+                "enabled": self.external_trigger_enabled,
+                "active": bool(
+                    self.external_trigger_enabled and age_ms is not None
+                    and age_ms <= active_timeout_ms),
+                "source": self.external_trigger_source,
+                "activation": self.external_trigger_activation,
+                "callback_frames": self.external_trigger_callback_count,
+                "complete_frames": self.external_trigger_complete_count,
+                "incomplete_frames": self.external_trigger_incomplete_count,
+                "measured_hz": round(measured_hz, 3),
+                "period_ms": round(period_ms, 3) if period_ms else None,
+                "last_frame_age_ms": round(age_ms, 1) if age_ms is not None else None,
+                "last_frame_status": self.external_trigger_last_status,
+                "evs_output_line": TRIGGER_OUTPUT_LINE,
+                "evs_output_source": "ExposureActive",
+                "evs_output_inverter": TRIGGER_OUTPUT_INVERTER,
+            }
 
     def bandwidth_status(self):
         return {
@@ -434,6 +488,7 @@ class CameraThread(threading.Thread):
         self.external_trigger_enabled = bool(enabled)
         self.external_trigger_source = source
         self.external_trigger_activation = activation
+        self.reset_external_trigger_monitor()
 
     def get_trigger_options(self):
         with self.camera_control_lock:
@@ -736,6 +791,8 @@ class CameraThread(threading.Thread):
 
         frame_status = safe_value(frame.get_status)
         self.last_frame_status = str(frame_status)
+        self.record_external_trigger_result(
+            host_monotonic_ns, frame_status == FrameStatus.Complete, frame_status)
         frame_id = safe_value(frame.get_id)
         frame_id_delta = None
         missing_before = 0
@@ -1483,6 +1540,8 @@ def status():
         "message": camera_thread.last_error if camera_thread else "カメラを初期化していません。",
         "camera_settings": camera_settings,
         "trigger_configuration": camera_thread.trigger_configuration() if camera_thread else {},
+        "external_trigger_monitor": (
+            camera_thread.external_trigger_monitor_status() if camera_thread else {}),
         "recording_roi": dict(camera_thread.roi_configuration) if camera_thread else {},
         "measured_fps": round(camera_thread.measured_fps(), 3) if camera_thread else 0,
         "connection": {
