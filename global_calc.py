@@ -46,6 +46,11 @@ def get_trim_pixel_size(frame_resolution:tuple, event_resolution:tuple, frame_se
     frame_sensor_w, frame_sensor_h = frame_sensor
     event_sensor_w, event_sensor_h = event_sensor
 
+    # フレーム側のセンサーが小さい軸は、フレーム画像を切り抜かない。
+    # 先に初期化しておくことで、その構成でも常に有効な値を返す。
+    frame_trim_w = 0
+    frame_trim_h = 0
+
     if frame_sensor_w < event_sensor_w:
         """TODO:Not used, commented out
         #print(f'width:Event is large')
@@ -78,7 +83,7 @@ def get_trim_pixel_size(frame_resolution:tuple, event_resolution:tuple, frame_se
         frame_res_h_calc = int(frame_res_h_calc if frame_res_h_calc % 2 == 0 else frame_res_h_calc - 1)
         frame_trim_h = int((frame_res_h - frame_res_h_calc) / 2)
 
-        return (frame_trim_w, frame_trim_h)
+    return (frame_trim_w, frame_trim_h)
 
 """
 Adjust ROI to meet frame camera specifications.

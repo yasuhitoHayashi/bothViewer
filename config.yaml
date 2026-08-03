@@ -6,6 +6,7 @@ eventCam:
 
 frameCam:
   exposure: "Once"
+  frameRate: 10
   gain:
     mode: "Manual"
     value: 0

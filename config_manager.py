@@ -19,6 +19,7 @@ def load_config():
             },
             "frameCam": {
                 "exposure": "Once",
+                "frameRate": 10,
                 "gain": {"mode": "Manual", "value": 0}
             },
             "recording": {
@@ -50,7 +51,8 @@ def save_config_snapshot(config, snapshot_dir, prefix="config_snapshot"):
     """撮影開始時の設定を snapshot_dir にタイムスタンプ付きファイルとして保存する"""
     if not os.path.exists(snapshot_dir):
         os.makedirs(snapshot_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # 短いインターバル録画でも同名にならないよう、ミリ秒まで含める。
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")[:-3]
     filename = f"{timestamp}_{prefix}.yaml"
     snapshot_path = os.path.join(snapshot_dir, filename)
     with open(snapshot_path, "w") as f:

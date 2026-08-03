@@ -1,9 +1,6 @@
-ffmpeg
 ffmpeg-python
 Flask
+h5py
 numpy
 opencv-python
-pandas
-numba
-pillow
 PyYAML

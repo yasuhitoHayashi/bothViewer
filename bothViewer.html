@@ -3,537 +3,533 @@ Author: HAYASHI Yasuhito (dangom_ya)
 Licensed under the Apache License, Version 2.0.
 -->
 <!DOCTYPE html>
-<html lang="en">
-
+<html lang="ja">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>Both Viewer</title>
-  <!-- Bootstrap CSS -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
+    :root {
+      --bg: #080b10;
+      --surface: #111722;
+      --surface-raised: #171f2c;
+      --border: #293445;
+      --text: #f3f6fa;
+      --muted: #94a3b8;
+      --accent: #54d2d2;
+      --accent-strong: #2bb7bc;
+      --danger: #ff6474;
+      --success: #48d597;
+      --warning: #f4be5b;
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+
     body {
-      background-color: #222;
-      color: #eee;
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 12% 0%, rgba(43, 183, 188, .10), transparent 30rem),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
     }
-    .card-header {
-      background-color: #333;
-      color: #eee;
+
+    button, input, select { font: inherit; }
+
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
     }
-    .card {
-      background-color: #2a2a2a;
-      border: none;
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      min-height: 68px;
+      padding: 12px 24px;
+      border-bottom: 1px solid rgba(148, 163, 184, .14);
+      background: rgba(8, 11, 16, .88);
+      backdrop-filter: blur(18px);
     }
-    .navbar, .btn {
-      border-radius: 0;
+
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent), #397be8);
+      color: #071015;
+      font-weight: 900;
+    }
+    .brand strong { display: block; letter-spacing: .02em; }
+    .brand small { display: block; color: var(--muted); font-size: 11px; letter-spacing: .12em; }
+
+    .system-status { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 13px; }
+    .status-item { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #536176; box-shadow: 0 0 0 3px rgba(83,97,118,.14); }
+    .status-dot.online { background: var(--success); box-shadow: 0 0 0 3px rgba(72,213,151,.14); }
+    .status-dot.recording { background: var(--danger); box-shadow: 0 0 0 3px rgba(255,100,116,.15); animation: pulse 1.3s infinite; }
+    @keyframes pulse { 50% { opacity: .4; } }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 18px;
+      max-width: 1800px;
+      margin: 0 auto;
+      padding: 20px 24px 32px;
+    }
+
+    .viewer-area { min-width: 0; }
+    .viewer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+    .viewer-toolbar h1 { margin: 0; font-size: 16px; font-weight: 650; }
+    .toolbar-actions { display: flex; gap: 8px; }
+
+    .btn {
+      min-height: 40px;
+      padding: 8px 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-raised);
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color .15s, background .15s, transform .15s;
+    }
+    .btn:hover { border-color: #46566e; background: #1d2736; }
+    .btn:active { transform: translateY(1px); }
+    .btn:disabled { opacity: .48; cursor: wait; }
+    .btn-primary { border-color: transparent; background: var(--accent-strong); color: #031415; font-weight: 700; }
+    .btn-primary:hover { background: var(--accent); border-color: transparent; }
+    .btn-danger { border-color: rgba(255,100,116,.45); background: rgba(255,100,116,.12); color: #ff9aa5; font-weight: 700; }
+    .btn-danger:hover { background: rgba(255,100,116,.20); border-color: var(--danger); }
+    .btn-stop { border-color: #46566e; background: #202938; }
+    .btn-block { width: 100%; }
+
+    .video-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .video-grid.vertical { grid-template-columns: 1fr; }
+    .video-card { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: 0 12px 40px rgba(0,0,0,.2); }
+    .video-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+    .video-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
+    .video-meta { color: var(--muted); font-size: 11px; }
+    .stream-stage { position: relative; display: grid; place-items: center; min-height: 280px; aspect-ratio: 16 / 10; background: #030507; }
+    .stream-stage img { display: block; width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; }
+    .stream-hint { position: absolute; right: 10px; bottom: 10px; padding: 4px 8px; border-radius: 7px; background: rgba(3,5,7,.70); color: #cbd5e1; font-size: 11px; opacity: 0; transition: opacity .15s; pointer-events: none; }
+    .stream-stage:hover .stream-hint { opacity: 1; }
+
+    .control-panel { min-width: 0; }
+    .control-heading { display: flex; align-items: center; justify-content: space-between; min-height: 40px; margin-bottom: 12px; }
+    .control-heading h2 { margin: 0; font-size: 16px; }
+    .control-heading span { color: var(--muted); font-size: 12px; }
+
+    details { overflow: hidden; margin-bottom: 9px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+    summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 14px; cursor: pointer; font-size: 13px; font-weight: 700; list-style: none; }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: "+"; color: var(--muted); font-size: 18px; font-weight: 400; }
+    details[open] summary::after { content: "−"; }
+    details[open] summary { border-bottom: 1px solid var(--border); }
+    .details-body { padding: 14px; }
+    .details-body > :first-child { margin-top: 0; }
+    .details-body > :last-child { margin-bottom: 0; }
+
+    .field { margin-bottom: 12px; }
+    .field label { display: block; margin-bottom: 5px; color: #cbd5e1; font-size: 12px; }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+    input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; background: #0b1018; color: var(--text); }
+    input::placeholder { color: #66758a; }
+    .input-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+    .button-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+    .check-row { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; color: #cbd5e1; font-size: 13px; }
+    .check-row input { width: 18px; min-height: 18px; accent-color: var(--accent-strong); }
+    .help { margin: -4px 0 12px; color: var(--muted); font-size: 11px; }
+
+    .record-panel { margin-top: 14px; padding: 14px; border: 1px solid rgba(84,210,210,.25); border-radius: var(--radius); background: linear-gradient(135deg, rgba(43,183,188,.09), rgba(17,23,34,.95)); }
+    .record-panel h3 { margin: 0 0 12px; font-size: 13px; }
+
+    .toast-region { position: fixed; z-index: 50; top: 82px; right: 24px; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+    .toast { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 11px; background: #17202d; box-shadow: 0 14px 38px rgba(0,0,0,.34); font-size: 13px; animation: toast-in .2s ease-out; }
+    .toast::before { content: ""; flex: 0 0 auto; width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
+    .toast.error::before { background: var(--danger); }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } }
+
+    dialog { width: min(96vw, 1600px); height: min(94vh, 1000px); padding: 0; border: 1px solid var(--border); border-radius: var(--radius); background: #05070a; color: var(--text); }
+    dialog::backdrop { background: rgba(0,0,0,.86); backdrop-filter: blur(5px); }
+    .dialog-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .dialog-header h2 { margin: 0; font-size: 14px; }
+    .dialog-close { width: 36px; height: 36px; padding: 0; font-size: 20px; }
+    .dialog-body { display: grid; place-items: center; height: calc(100% - 61px); }
+    .dialog-body img { width: 100%; height: 100%; object-fit: contain; }
+
+    @media (max-width: 1100px) {
+      .workspace { grid-template-columns: 1fr; }
+      .control-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+      .control-heading, .record-panel { grid-column: 1 / -1; }
+      details { margin-bottom: 0; }
+    }
+    @media (max-width: 720px) {
+      .topbar { padding: 10px 16px; }
+      .system-status .status-label { display: none; }
+      .workspace { padding: 16px; }
+      .video-grid { grid-template-columns: 1fr; }
+      #layoutButton { display: none; }
+      .control-panel { display: block; }
+      details { margin-bottom: 9px; }
+      .stream-stage { min-height: 210px; }
+      .field-row { grid-template-columns: 1fr; }
+      .toast-region { top: 72px; right: 16px; }
     }
   </style>
 </head>
 <body>
-  <!-- Toast Container for non-blocking notifications -->
-  <div id="toast-container" class="position-fixed top-0 end-0 p-3" style="z-index: 1100;"></div>
-  
-  <!-- Navigation Bar -->
-  <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-    <div class="container-fluid">
-      <a class="navbar-brand" href="#">Both Viewer</a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" 
-              aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-         <span class="navbar-toggler-icon"></span>
-      </button>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">B</div>
+      <div><strong>Both Viewer</strong><small>DUAL CAMERA CONSOLE</small></div>
     </div>
-  </nav>
-  
-  <!-- Main Content: 左側に動画、右側に設定パネル -->
-  <div class="container-fluid my-4">
-    <div class="row">
-      <!-- 動画表示エリア -->
-      <div class="col-lg-9">
-        <!-- レイアウト切替ボタン -->
-        <div class="mb-3 text-center">
-          <button id="toggleLayoutBtn" class="btn btn-secondary" onclick="toggleLayout()">Switch to Vertical Layout</button>
-        </div>
-        <div class="row" id="videoRow">
-          <div class="col-lg-6 video-col mb-4">
-            <div class="card">
-              <div class="card-header">EVS Video Stream</div>
-              <div class="card-body text-center">
-                <!-- clickable-video クラスを付与 -->
-                <img id="evsVideo" src="http://127.0.0.1:5001/video_feed" alt="EVS Video Stream" class="img-fluid clickable-video">
-              </div>
-            </div>
-          </div>
-          <div class="col-lg-6 video-col mb-4">
-            <div class="card">
-              <div class="card-header">Frame Camera Stream</div>
-              <div class="card-body text-center">
-                <img id="frameVideo" src="http://127.0.0.1:5002/video_feed" alt="Frame Camera Stream" class="img-fluid clickable-video">
-              </div>
-            </div>
-          </div>
+    <div class="system-status" aria-label="接続状態">
+      <span class="status-item"><span id="evsStatusDot" class="status-dot"></span><span class="status-label">EVS</span></span>
+      <span class="status-item"><span id="frameStatusDot" class="status-dot"></span><span class="status-label">FRAME</span></span>
+      <span id="recordStatus" class="status-item" hidden><span class="status-dot recording"></span>REC</span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="viewer-area" aria-labelledby="viewerTitle">
+      <div class="viewer-toolbar">
+        <h1 id="viewerTitle">ライブビュー</h1>
+        <div class="toolbar-actions">
+          <button id="layoutButton" class="btn" type="button">縦に並べる</button>
         </div>
       </div>
-      <!-- 設定パネル -->
-      <div class="col-lg-3">
-        <div class="accordion" id="settingsAccordion">
-          <!-- Save Settings -->
-          <div class="accordion-item mb-2">
-            <h2 class="accordion-header" id="headingSave">
-              <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseSave" aria-expanded="true" aria-controls="collapseSave">
-                Save Settings
-              </button>
-            </h2>
-            <div id="collapseSave" class="accordion-collapse collapse show" aria-labelledby="headingSave" data-bs-parent="#settingsAccordion">
-              <div class="accordion-body">
-                <div class="mb-3">
-                  <label for="save_location" class="form-label">Save Directory</label>
-                  <input type="text" class="form-control" id="save_location">
-                </div>
-                <div class="mb-3">
-                  <label for="save_filename" class="form-label">Save Filename</label>
-                  <input type="text" class="form-control" id="save_filename">
-                </div>
-                <button class="btn btn-primary w-100" onclick="updateSave()">Update Save Settings</button>
-              </div>
-            </div>
+      <div id="videoGrid" class="video-grid">
+        <article class="video-card">
+          <header class="video-card-header">
+            <span class="video-title"><span id="evsCardDot" class="status-dot"></span>イベントカメラ</span>
+            <span class="video-meta">EVS · 5001</span>
+          </header>
+          <div class="stream-stage">
+            <img id="evsVideo" src="http://127.0.0.1:5001/video_feed" alt="イベントカメラのライブ映像">
+            <span class="stream-hint">クリックで拡大</span>
           </div>
-          <!-- Bias Settings -->
-          <div class="accordion-item mb-2">
-            <h2 class="accordion-header" id="headingBias">
-              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseBias" aria-expanded="false" aria-controls="collapseBias">
-                Bias Settings
-              </button>
-            </h2>
-            <div id="collapseBias" class="accordion-collapse collapse" aria-labelledby="headingBias" data-bs-parent="#settingsAccordion">
-              <div class="accordion-body">
-                <div class="mb-3">
-                  <label for="bias_on" class="form-label">Bias Diff ON</label>
-                  <input type="number" class="form-control" id="bias_on" value="0">
-                </div>
-                <div class="mb-3">
-                  <label for="bias_off" class="form-label">Bias Diff OFF</label>
-                  <input type="number" class="form-control" id="bias_off" value="0">
-                </div>
-                <button class="btn btn-primary w-100" onclick="setBias()">Update Bias</button>
-              </div>
-            </div>
+        </article>
+        <article class="video-card">
+          <header class="video-card-header">
+            <span class="video-title"><span id="frameCardDot" class="status-dot"></span>フレームカメラ</span>
+            <span class="video-meta">FRAME · 5002</span>
+          </header>
+          <div class="stream-stage">
+            <img id="frameVideo" src="http://127.0.0.1:5002/video_feed" alt="フレームカメラのライブ映像">
+            <span class="stream-hint">クリックで拡大</span>
           </div>
-          <!-- Trigger In Settings -->
-          <div class="accordion-item mb-2">
-            <h2 class="accordion-header" id="headingTrigger">
-              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTrigger" aria-expanded="false" aria-controls="collapseTrigger">
-                Trigger In Settings
-              </button>
-            </h2>
-            <div id="collapseTrigger" class="accordion-collapse collapse" aria-labelledby="headingTrigger" data-bs-parent="#settingsAccordion">
-              <div class="accordion-body">
-                <div class="form-check mb-3">
-                  <input type="checkbox" class="form-check-input" id="trigger_in">
-                  <label class="form-check-label" for="trigger_in">Enable Trigger In</label>
-                </div>
-                <button class="btn btn-primary w-100" onclick="setTrigger()">Update Trigger</button>
-              </div>
-            </div>
-          </div>
-          <!-- Exposure Settings -->
-          <div class="accordion-item mb-2">
-            <h2 class="accordion-header" id="headingExposure">
-              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseExposure" aria-expanded="false" aria-controls="collapseExposure">
-                Exposure Settings
-              </button>
-            </h2>
-            <div id="collapseExposure" class="accordion-collapse collapse" aria-labelledby="headingExposure" data-bs-parent="#settingsAccordion">
-              <div class="accordion-body">
-                <div class="d-grid gap-2">
-                  <button class="btn btn-secondary" onclick="setExposure('Once')">AutoExposure Once</button>
-                  <button class="btn btn-secondary" onclick="setExposure('Continuous')">Continuous</button>
-                </div>
-                <div class="input-group mt-2">
-                  <input type="number" id="exposure_manual_value" class="form-control" placeholder="Manual Exposure Value">
-                  <button class="btn btn-secondary" onclick="setExposureManual()">Set Manual Exposure</button>
-                </div>
-                <div class="input-group mt-2">
-                  <input type="number" id="fps_manual_value" class="form-control" placeholder="FPS Value">
-                  <button class="btn btn-secondary" onclick="setFramerate()">Set Frame Rate</button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <!-- Gain Settings -->
-          <div class="accordion-item mb-2">
-            <h2 class="accordion-header" id="headingGain">
-              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseGain" aria-expanded="false" aria-controls="collapseGain">
-                Gain Settings
-              </button>
-            </h2>
-            <div id="collapseGain" class="accordion-collapse collapse" aria-labelledby="headingGain" data-bs-parent="#settingsAccordion">
-              <div class="accordion-body">
-                <div class="d-grid gap-2">
-                  <button class="btn btn-secondary" onclick="setGain('Once')">AutoGain Once</button>
-                  <button class="btn btn-secondary" onclick="setGain('Continuous')">Continuous</button>
-                </div>
-                <div class="input-group mt-2">
-                  <input type="number" id="gain_manual_value" class="form-control" placeholder="Manual Gain Value">
-                  <button class="btn btn-secondary" onclick="setGainManual()">Set Manual Gain</button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <!-- White Balance Settings -->
-          <div class="accordion-item mb-2">
-            <h2 class="accordion-header" id="headingWB">
-              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseWB" aria-expanded="false" aria-controls="collapseWB">
-                White Balance Settings
-              </button>
-            </h2>
-            <div id="collapseWB" class="accordion-collapse collapse" aria-labelledby="headingWB" data-bs-parent="#settingsAccordion">
-              <div class="accordion-body">
-                <div class="d-grid gap-2">
-                  <button class="btn btn-secondary" onclick="setWhiteBalance('Once')">AutoWhiteBalance Once</button>
-                  <button class="btn btn-secondary" onclick="setWhiteBalance('Continuous')">Continuous</button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <!-- Interval Recording Settings -->
-          <div class="accordion-item mb-2">
-            <h2 class="accordion-header" id="headingInterval">
-              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseInterval" aria-expanded="false" aria-controls="collapseInterval">
-                Interval Recording
-              </button>
-            </h2>
-            <div id="collapseInterval" class="accordion-collapse collapse" aria-labelledby="headingInterval" data-bs-parent="#settingsAccordion">
-              <div class="accordion-body">
-                <div class="mb-3">
-                  <label for="interval_sec" class="form-label">Interval (seconds)</label>
-                  <input type="number" class="form-control" id="interval_sec" value="60">
-                </div>
-                <div class="mb-3">
-                  <label for="duration_sec" class="form-label">Recording Duration (seconds)</label>
-                  <input type="number" class="form-control" id="duration_sec" value="10">
-                </div>
-                <div class="d-grid gap-2">
-                  <button class="btn btn-secondary" onclick="startIntervalRecording()">Start Interval Recording</button>
-                  <button class="btn btn-secondary" onclick="stopIntervalRecording()">Stop Interval Recording</button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <!-- Recording Control -->
-          <div class="accordion-item">
-            <h2 class="accordion-header" id="headingRecording">
-              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseRecording" aria-expanded="false" aria-controls="collapseRecording">
-                Recording Control
-              </button>
-            </h2>
-            <div id="collapseRecording" class="accordion-collapse collapse" aria-labelledby="headingRecording" data-bs-parent="#settingsAccordion">
-              <div class="accordion-body">
-                <div class="mb-3">
-                  <label for="record_mode" class="form-label">Frame Save Mode</label>
-                  <select class="form-select" id="record_mode">
-                    <option value="mp4" selected>Video (mp4)</option>
-                    <option value="images">Images</option>
-                  </select>
-                </div>
-                <div class="d-grid gap-2">
-                  <button class="btn btn-danger" onclick="startRecording()">Start Recording</button>
-                  <button class="btn btn-danger" onclick="stopRecording()">Stop Recording</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div> <!-- end accordion -->
+        </article>
       </div>
-    </div>
-  </div>
-  
-  <!-- Bootstrap Modal for Maximized Video -->
-  <div class="modal fade" id="videoModal" tabindex="-1" aria-labelledby="videoModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered modal-fullscreen">
-      <div class="modal-content bg-dark">
-        <div class="modal-header border-0">
-          <h5 class="modal-title text-light" id="videoModalLabel">Video Viewer</h5>
-          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+    </section>
+
+    <aside class="control-panel" aria-labelledby="controlTitle">
+      <div class="control-heading"><h2 id="controlTitle">コントロール</h2><span>設定は即時反映</span></div>
+
+      <details open>
+        <summary>保存設定</summary>
+        <div class="details-body">
+          <div class="field"><label for="save_location">保存先フォルダ</label><input id="save_location" type="text" autocomplete="off"></div>
+          <div class="field"><label for="save_filename">ファイル名の識別子</label><input id="save_filename" type="text" placeholder="例: sample-01" autocomplete="off"></div>
+          <p class="help">日時の後ろに識別子を付けて保存します。</p>
+          <button class="btn btn-primary btn-block" type="button" data-action="updateSave">保存設定を反映</button>
         </div>
-        <div class="modal-body p-0 text-center">
-          <img id="modalVideo" src="" alt="Maximized Video" class="img-fluid">
+      </details>
+
+      <details>
+        <summary>EVS バイアス</summary>
+        <div class="details-body">
+          <div class="field-row">
+            <div class="field"><label for="bias_on">Diff ON</label><input id="bias_on" type="number" value="20" step="1"></div>
+            <div class="field"><label for="bias_off">Diff OFF</label><input id="bias_off" type="number" value="20" step="1"></div>
+          </div>
+          <button class="btn btn-primary btn-block" type="button" data-action="setBias">バイアスを反映</button>
         </div>
-      </div>
-    </div>
-  </div>
-  
-  <!-- Bootstrap JS Bundle -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+      </details>
+
+      <details>
+        <summary>外部トリガー</summary>
+        <div class="details-body">
+          <label class="check-row"><input id="trigger_in" type="checkbox">Trigger In を有効にする</label>
+          <button class="btn btn-primary btn-block" type="button" data-action="setTrigger">トリガー設定を反映</button>
+        </div>
+      </details>
+
+      <details>
+        <summary>露光・フレームレート</summary>
+        <div class="details-body">
+          <div class="button-row">
+            <button class="btn" type="button" data-action="exposureOnce">自動露光 1回</button>
+            <button class="btn" type="button" data-action="exposureContinuous">自動露光 継続</button>
+          </div>
+          <div class="field"><label for="exposure_manual_value">露光時間</label><div class="input-action"><input id="exposure_manual_value" type="number" step="any"><button class="btn" type="button" data-action="setExposureManual">設定</button></div></div>
+          <div class="field"><label for="fps_manual_value">フレームレート (fps)</label><div class="input-action"><input id="fps_manual_value" type="number" min="0.1" step="0.1"><button class="btn" type="button" data-action="setFramerate">設定</button></div></div>
+        </div>
+      </details>
+
+      <details>
+        <summary>ゲイン・ホワイトバランス</summary>
+        <div class="details-body">
+          <div class="button-row">
+            <button class="btn" type="button" data-action="gainOnce">自動ゲイン 1回</button>
+            <button class="btn" type="button" data-action="gainContinuous">自動ゲイン 継続</button>
+          </div>
+          <div class="field"><label for="gain_manual_value">手動ゲイン</label><div class="input-action"><input id="gain_manual_value" type="number" step="any"><button class="btn" type="button" data-action="setGainManual">設定</button></div></div>
+          <div class="button-row">
+            <button class="btn" type="button" data-action="wbOnce">自動WB 1回</button>
+            <button class="btn" type="button" data-action="wbContinuous">自動WB 継続</button>
+          </div>
+        </div>
+      </details>
+
+      <details>
+        <summary>インターバル録画</summary>
+        <div class="details-body">
+          <div class="field-row">
+            <div class="field"><label for="interval_sec">間隔 (秒)</label><input id="interval_sec" type="number" value="60" min="0.1" step="0.1"></div>
+            <div class="field"><label for="duration_sec">録画時間 (秒)</label><input id="duration_sec" type="number" value="10" min="0.1" step="0.1"></div>
+          </div>
+          <div class="button-row">
+            <button class="btn btn-primary" type="button" data-action="startInterval">開始</button>
+            <button class="btn btn-stop" type="button" data-action="stopInterval">停止</button>
+          </div>
+        </div>
+      </details>
+
+      <section class="record-panel" aria-labelledby="recordTitle">
+        <h3 id="recordTitle">同時録画</h3>
+        <div class="field"><label for="record_mode">フレームカメラの保存形式</label><select id="record_mode"><option value="mp4">MP4 動画</option><option value="images">連番画像</option></select></div>
+        <div class="button-row">
+          <button id="recordButton" class="btn btn-danger" type="button" data-action="startRecording">● 録画開始</button>
+          <button id="stopButton" class="btn btn-stop" type="button" data-action="stopRecording">停止</button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="toastRegion" class="toast-region" role="status" aria-live="polite"></div>
+
+  <dialog id="videoDialog">
+    <div class="dialog-header"><h2 id="dialogTitle">ライブビュー</h2><button class="btn dialog-close" type="button" aria-label="閉じる">×</button></div>
+    <div class="dialog-body"><img id="dialogVideo" alt="拡大したライブ映像"></div>
+  </dialog>
+
   <script>
-    // 動画レイアウト状態（true=横並び、false=縦並び）
-    let isHorizontal = true;
-    function toggleLayout() {
-      const videoCols = document.querySelectorAll('.video-col');
-      const toggleBtn = document.getElementById('toggleLayoutBtn');
-      videoCols.forEach(col => {
-        if (isHorizontal) {
-          col.classList.remove('col-lg-6');
-          col.classList.add('col-12');
-        } else {
-          col.classList.remove('col-12');
-          col.classList.add('col-lg-6');
-        }
-      });
-      isHorizontal = !isHorizontal;
-      toggleBtn.textContent = isHorizontal ? "Switch to Vertical Layout" : "Switch to Horizontal Layout";
-    }
-    
-    // Toast 表示（1秒）
-    function showToast(message) {
-      const container = document.getElementById('toast-container');
+    const API = { evs: 'http://127.0.0.1:5001', frame: 'http://127.0.0.1:5002' };
+    let intervalTimer = null;
+    let recordingTimeout = null;
+    let recording = false;
+
+    const $ = (id) => document.getElementById(id);
+
+    function showToast(message, type = 'success') {
       const toast = document.createElement('div');
-      toast.className = 'toast align-items-center text-bg-primary border-0';
-      toast.setAttribute('role', 'alert');
-      toast.setAttribute('aria-live', 'assertive');
-      toast.setAttribute('aria-atomic', 'true');
-      toast.innerHTML = `<div class="d-flex"><div class="toast-body">${message}</div></div>`;
-      container.appendChild(toast);
-      const bsToast = new bootstrap.Toast(toast, { delay: 1000 });
-      bsToast.show();
-      setTimeout(() => { container.removeChild(toast); }, 1100);
-    }
-    
-    // Exposure, Gain, FPS の manual 値更新
-    function updateExposureManualField() {
-      fetch('http://127.0.0.1:5002/get_settings')
-        .then(response => response.json())
-        .then(data => {
-          if (data.status === "success") {
-            document.getElementById("exposure_manual_value").value = data.exposure;
-            document.getElementById("gain_manual_value").value = data.gain;
-            if (document.getElementById("fps_manual_value")) {
-              document.getElementById("fps_manual_value").value = data.fps;
-            }
-          }
-        })
-        .catch(err => console.error(err));
-    }
-    window.addEventListener("load", updateExposureManualField);
-    
-    // ページ読み込み時に URL から保存先ディレクトリを設定
-    (function setDefaultDirectory() {
-      var url = window.location.href;
-      var defaultDir = url.substring(0, url.lastIndexOf('/'));
-      if (defaultDir.indexOf("file://") === 0) {
-        defaultDir = defaultDir.replace("file://", "");
-      }
-      document.getElementById("save_location").value = defaultDir;
-    })();
-    
-    function updateSave() {
-      var save_location = document.getElementById("save_location").value;
-      var save_filename = document.getElementById("save_filename").value;
-      Promise.all([
-        fetch('http://127.0.0.1:5001/set_save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ save_location: save_location, save_filename: save_filename })
-        }).then(res => res.json()),
-        fetch('http://127.0.0.1:5002/set_save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ save_location: save_location, save_filename: save_filename })
-        }).then(res => res.json())
-      ])
-      .then(results => {
-        showToast("EVS: " + results[0].message + " | Frame: " + results[1].message);
-      })
-      .catch(err => console.error(err));
-    }
-    
-    function setBias() {
-      var bias_on = parseInt(document.getElementById("bias_on").value);
-      var bias_off = parseInt(document.getElementById("bias_off").value);
-      fetch('http://127.0.0.1:5001/set_bias', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bias_diff_on: bias_on, bias_diff_off: bias_off })
-      })
-      .then(response => response.json())
-      .then(data => showToast("EVS: " + data.message))
-      .catch(err => console.error(err));
-    }
-    
-    function setTrigger() {
-      var trigger = document.getElementById("trigger_in").checked;
-      fetch('http://127.0.0.1:5001/set_trigger', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ trigger: trigger })
-      })
-      .then(response => response.json())
-      .then(data => showToast("EVS: " + data.message))
-      .catch(err => console.error(err));
-    }
-    
-    function setExposure(mode) {
-      fetch('http://127.0.0.1:5002/set_exposure', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: mode })
-      })
-      .then(response => response.json())
-      .then(data => {
-        showToast("Frame: " + data.message);
-        updateExposureManualField();
-      })
-      .catch(err => console.error(err));
-    }
-    
-    function setExposureManual() {
-      var manual_value = document.getElementById("exposure_manual_value").value;
-      fetch('http://127.0.0.1:5002/set_exposure', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'Manual', value: manual_value })
-      })
-      .then(response => response.json())
-      .then(data => {
-        showToast("Frame: " + data.message);
-        updateExposureManualField();
-      })
-      .catch(err => console.error(err));
-    }
-    
-    function setGain(mode) {
-      fetch('http://127.0.0.1:5002/set_gain', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: mode })
-      })
-      .then(response => response.json())
-      .then(data => {
-        showToast("Frame: " + data.message);
-        updateExposureManualField();
-      })
-      .catch(err => console.error(err));
-    }
-    
-    function setGainManual() {
-      var manual_value = document.getElementById("gain_manual_value").value;
-      fetch('http://127.0.0.1:5002/set_gain', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'Manual', value: manual_value })
-      })
-      .then(response => response.json())
-      .then(data => {
-        showToast("Frame: " + data.message);
-        updateExposureManualField();
-      })
-      .catch(err => console.error(err));
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      $('toastRegion').appendChild(toast);
+      window.setTimeout(() => toast.remove(), 3800);
     }
 
-      function setFramerate() {
-        var fps = document.getElementById("fps_manual_value").value;
-        fetch('http://127.0.0.1:5002/set_framerate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fps: fps })
-      })
-      .then(response => response.json())
-      .then(data => {
-        if (data.status === "success") {
-          showToast("Frame: Frame rate set to " + data.fps);
-        } else {
-          showToast("Frame: " + data.message);
-        }
-        updateExposureManualField();
-      })
-      .catch(err => console.error(err));
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, options);
+      let data;
+      try { data = await response.json(); } catch { data = { message: `HTTP ${response.status}` }; }
+      if (!response.ok || data.status === 'error') throw new Error(data.message || `HTTP ${response.status}`);
+      return data;
     }
-    
-    function setWhiteBalance(mode) {
-      fetch('http://127.0.0.1:5002/set_whitebalance', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: mode })
-      })
-      .then(response => response.json())
-      .then(data => showToast("Frame: " + data.message))
-      .catch(err => console.error(err));
+
+    const post = (url, body) => requestJson(url, {
+      method: 'POST',
+      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+
+    async function runAction(button, action) {
+      button.disabled = true;
+      try { await action(); } catch (error) { showToast(error.message || '操作に失敗しました。', 'error'); }
+      finally { button.disabled = false; }
     }
-    
-    function startRecording() {
-      var mode = document.getElementById("record_mode").value;
-      Promise.all([
-        fetch('http://127.0.0.1:5001/start_recording', { method: 'POST' }).then(res => res.json()),
-        fetch('http://127.0.0.1:5002/start_recording', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: mode })
-        }).then(res => res.json())
-      ])
-      .then(results => {
-        showToast("EVS: " + results[0].message + " | Frame: " + results[1].message);
-      })
-      .catch(err => console.error(err));
+
+    function value(id) { return $(id).value.trim(); }
+    function finiteNumber(id, label) {
+      const rawValue = value(id);
+      if (!rawValue) throw new Error(`${label}を入力してください。`);
+      const number = Number(rawValue);
+      if (!Number.isFinite(number)) throw new Error(`${label}を入力してください。`);
+      return number;
     }
-    
-    function stopRecording() {
-      Promise.all([
-        fetch('http://127.0.0.1:5001/stop_recording', { method: 'POST' }).then(res => res.json()),
-        fetch('http://127.0.0.1:5002/stop_recording', { method: 'POST' }).then(res => res.json())
-      ])
-      .then(results => {
-        showToast("EVS: " + results[0].message + " | Frame: " + results[1].message);
-      })
-      .catch(err => console.error(err));
+
+    async function updateSave() {
+      const saveLocation = value('save_location');
+      if (!saveLocation) throw new Error('保存先フォルダを入力してください。');
+      const payload = { save_location: saveLocation, save_filename: value('save_filename') };
+      const results = await Promise.all([post(`${API.evs}/set_save`, payload), post(`${API.frame}/set_save`, payload)]);
+      showToast(`保存設定を反映しました（EVS / Frame）`);
+      return results;
     }
-    
-    var intervalTimer = null;
-    var recordingTimeout = null;
-    function startIntervalRecording() {
-      var intervalSec = parseFloat(document.getElementById("interval_sec").value);
-      var durationSec = parseFloat(document.getElementById("duration_sec").value);
-      if (isNaN(intervalSec) || isNaN(durationSec) || intervalSec <= 0 || durationSec <= 0) {
-        showToast("Please enter valid numbers for interval and duration.");
-        return;
+
+    async function setBias() {
+      const data = await post(`${API.evs}/set_bias`, { bias_diff_on: finiteNumber('bias_on', 'Diff ON'), bias_diff_off: finiteNumber('bias_off', 'Diff OFF') });
+      showToast(data.message);
+    }
+
+    async function setTrigger() {
+      const data = await post(`${API.evs}/set_trigger`, { trigger: $('trigger_in').checked });
+      showToast(data.message);
+    }
+
+    async function setFrameMode(endpoint, mode, valueKey, valueId) {
+      const payload = { mode };
+      if (valueKey) payload[valueKey] = finiteNumber(valueId, '設定値');
+      const data = await post(`${API.frame}/${endpoint}`, payload);
+      showToast(data.message);
+      await refreshFrameSettings();
+    }
+
+    async function setFramerate() {
+      const fps = finiteNumber('fps_manual_value', 'フレームレート');
+      if (fps <= 0) throw new Error('フレームレートは 0 より大きい値にしてください。');
+      const data = await post(`${API.frame}/set_framerate`, { fps });
+      showToast(`フレームレートを ${Number(data.fps).toFixed(1)} fps に設定しました。`);
+      await refreshFrameSettings();
+    }
+
+    async function refreshFrameSettings() {
+      try {
+        const data = await requestJson(`${API.frame}/get_settings`);
+        $('exposure_manual_value').value = data.exposure;
+        $('gain_manual_value').value = data.gain;
+        $('fps_manual_value').value = data.fps;
+      } catch { /* 起動直後やカメラ未接続時は状態表示に任せる */ }
+    }
+
+    function updateRecordingUi(active) {
+      recording = active;
+      $('recordStatus').hidden = !active;
+      $('recordButton').disabled = active;
+      $('stopButton').disabled = !active;
+    }
+
+    async function startRecording() {
+      const mode = value('record_mode');
+      const results = await Promise.allSettled([
+        post(`${API.evs}/start_recording`),
+        post(`${API.frame}/start_recording`, { mode })
+      ]);
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) {
+        await Promise.allSettled([
+          results[0].status === 'fulfilled' ? post(`${API.evs}/stop_recording`) : Promise.resolve(),
+          results[1].status === 'fulfilled' ? post(`${API.frame}/stop_recording`) : Promise.resolve()
+        ]);
+        throw failed.reason;
       }
-      if (durationSec > intervalSec) {
-        showToast("Recording duration must be less than or equal to the interval.");
-        return;
-      }
-      startRecording();
-      recordingTimeout = setTimeout(function() { stopRecording(); }, durationSec * 1000);
-      intervalTimer = setInterval(function() {
-        startRecording();
-        recordingTimeout = setTimeout(function() { stopRecording(); }, durationSec * 1000);
+      updateRecordingUi(true);
+      showToast('EVS とフレームカメラの録画を開始しました。');
+    }
+
+    async function stopRecording() {
+      const results = await Promise.allSettled([post(`${API.evs}/stop_recording`), post(`${API.frame}/stop_recording`)]);
+      updateRecordingUi(false);
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) throw failed.reason;
+      showToast('録画を停止しました。');
+    }
+
+    async function startIntervalRecording() {
+      if (intervalTimer !== null) throw new Error('インターバル録画はすでに実行中です。');
+      const intervalSec = finiteNumber('interval_sec', '録画間隔');
+      const durationSec = finiteNumber('duration_sec', '録画時間');
+      if (intervalSec <= 0 || durationSec <= 0) throw new Error('録画間隔と録画時間は 0 より大きい値にしてください。');
+      if (durationSec > intervalSec) throw new Error('録画時間は録画間隔以下にしてください。');
+      await startRecording();
+      recordingTimeout = window.setTimeout(stopRecordingSafely, durationSec * 1000);
+      intervalTimer = window.setInterval(async () => {
+        try {
+          await startRecording();
+          recordingTimeout = window.setTimeout(stopRecordingSafely, durationSec * 1000);
+        } catch (error) { showToast(error.message, 'error'); }
       }, intervalSec * 1000);
+      showToast(`${intervalSec} 秒間隔のインターバル録画を開始しました。`);
     }
-    
-    function stopIntervalRecording() {
-      if (intervalTimer !== null) {
-        clearInterval(intervalTimer);
-        intervalTimer = null;
-      }
-      if (recordingTimeout !== null) {
-        clearTimeout(recordingTimeout);
-        recordingTimeout = null;
-      }
-      stopRecording();
+
+    async function stopRecordingSafely() { try { await stopRecording(); } catch (error) { showToast(error.message, 'error'); } }
+
+    async function stopIntervalRecording() {
+      if (intervalTimer !== null) window.clearInterval(intervalTimer);
+      if (recordingTimeout !== null) window.clearTimeout(recordingTimeout);
+      intervalTimer = recordingTimeout = null;
+      if (recording) await stopRecording();
+      else showToast('インターバル録画を停止しました。');
     }
-    
-    // 動画をクリックした際にモーダルで最大化表示
-    document.addEventListener("DOMContentLoaded", function() {
-      const clickableVideos = document.querySelectorAll('.clickable-video');
-      clickableVideos.forEach(video => {
-        video.style.cursor = "pointer";
-        video.addEventListener("click", function() {
-          openVideoModal(this.src);
-        });
+
+    async function refreshStatus() {
+      const checks = await Promise.allSettled([
+        requestJson(`${API.evs}/status`),
+        requestJson(`${API.frame}/status`)
+      ]);
+      const evsOnline = checks[0].status === 'fulfilled' && checks[0].value.streaming;
+      const frameOnline = checks[1].status === 'fulfilled' && checks[1].value.streaming;
+      ['evsStatusDot', 'evsCardDot'].forEach((id) => $(id).classList.toggle('online', evsOnline));
+      ['frameStatusDot', 'frameCardDot'].forEach((id) => $(id).classList.toggle('online', frameOnline));
+      if (checks[0].status === 'fulfilled' && checks[1].status === 'fulfilled') {
+        updateRecordingUi(Boolean(checks[0].value.recording || checks[1].value.recording));
+      }
+    }
+
+    const actions = {
+      updateSave, setBias, setTrigger,
+      exposureOnce: () => setFrameMode('set_exposure', 'Once'),
+      exposureContinuous: () => setFrameMode('set_exposure', 'Continuous'),
+      setExposureManual: () => setFrameMode('set_exposure', 'Manual', 'value', 'exposure_manual_value'),
+      gainOnce: () => setFrameMode('set_gain', 'Once'),
+      gainContinuous: () => setFrameMode('set_gain', 'Continuous'),
+      setGainManual: () => setFrameMode('set_gain', 'Manual', 'value', 'gain_manual_value'),
+      wbOnce: () => setFrameMode('set_whitebalance', 'Once'),
+      wbContinuous: () => setFrameMode('set_whitebalance', 'Continuous'),
+      setFramerate, startRecording, stopRecording,
+      startInterval: startIntervalRecording,
+      stopInterval: stopIntervalRecording
+    };
+
+    document.querySelectorAll('[data-action]').forEach((button) => {
+      button.addEventListener('click', () => runAction(button, actions[button.dataset.action]));
+    });
+
+    $('layoutButton').addEventListener('click', () => {
+      const vertical = $('videoGrid').classList.toggle('vertical');
+      $('layoutButton').textContent = vertical ? '横に並べる' : '縦に並べる';
+    });
+
+    const dialog = $('videoDialog');
+    document.querySelectorAll('.stream-stage img').forEach((image) => {
+      image.addEventListener('click', () => {
+        $('dialogVideo').src = image.src;
+        $('dialogTitle').textContent = image.alt;
+        dialog.showModal();
       });
     });
-    
-    var videoModal = new bootstrap.Modal(document.getElementById("videoModal"));
-    function openVideoModal(src) {
-      document.getElementById("modalVideo").src = src;
-      videoModal.show();
-    }
+    document.querySelector('.dialog-close').addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+    dialog.addEventListener('close', () => { $('dialogVideo').removeAttribute('src'); });
+
+    const pageDirectory = decodeURIComponent(window.location.pathname.slice(0, window.location.pathname.lastIndexOf('/')));
+    $('save_location').value = pageDirectory || '.';
+    updateRecordingUi(false);
+    refreshFrameSettings();
+    refreshStatus();
+    window.setInterval(refreshStatus, 3000);
   </script>
 </body>
 </html>

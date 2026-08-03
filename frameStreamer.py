@@ -4,23 +4,33 @@
 Licensed under the Apache License, Version 2.0.
 """
 import argparse
+import math
 import os
+import queue
+import subprocess
 import threading
 import time
-import signal
 from datetime import datetime
 
 import cv2
-import numpy as np
-from PIL import Image
-import ffmpeg  # pip install ffmpeg-python
-import subprocess
+import ffmpeg
 from flask import Flask, Response, request, jsonify
-from vmbpy import VmbFeatureError
-import global_calc as g_calc
-from config_manager import load_config, save_config, save_config_snapshot
 
-import queue
+import global_calc as g_calc
+from config_manager import load_config, save_config_snapshot
+
+frame_streamer_instance = None
+
+
+def normalize_save_settings(save_location, save_filename):
+    if not isinstance(save_location, str) or not save_location.strip():
+        raise ValueError("保存先フォルダを指定してください。")
+    location = os.path.abspath(os.path.expanduser(save_location.strip()))
+    filename = (save_filename or "").strip()
+    if os.path.basename(filename) != filename or filename in {".", ".."}:
+        raise ValueError("ファイル名にフォルダ区切りは使用できません。")
+    os.makedirs(location, exist_ok=True)
+    return location, filename
 
 #######################################
 # YAML 設定ファイルからパラメータ読み込み
@@ -49,6 +59,7 @@ FRAME_QUEUE_SIZE = 10
 adjust_view = config_data["bothViewHW"]["frameCamHW"]["frame_shift"]
 ADJUST_VIEW_W = int(adjust_view["width"])
 ADJUST_VIEW_H = int(adjust_view["height"])
+DEFAULT_FRAME_RATE = float(config_data.get("frameCam", {}).get("frameRate", 10))
 
 #######################################
 # g_value の定義（各種計算用）
@@ -142,80 +153,205 @@ class CameraThread(threading.Thread):
         self.running = True
         self.external_callback = None
         self.cam = None  # 追加：外部アクセス用にカメラインスタンスを保持
+        self.last_error = None
+        self.callback_count = 0
+        self.frame_count = 0
+        self.last_frame_status = None
+        self.allocation_mode = None
+
+    @staticmethod
+    def set_optional_feature(cam, name, value):
+        """機種に存在する設定だけを適用し、映像取得自体は止めない。"""
+        try:
+            getattr(cam, name).set(value)
+            print(f"カメラ設定: {name}={value}")
+            return True
+        except Exception as exc:
+            print(f"カメラ設定をスキップ: {name}={value} ({exc})")
+            return False
+
+    @staticmethod
+    def run_optional_command(cam, name):
+        """利用可能なカメラコマンドだけを実行する。"""
+        try:
+            getattr(cam, name).run()
+            print(f"カメラコマンド: {name}")
+            return True
+        except Exception as exc:
+            print(f"カメラコマンドをスキップ: {name} ({exc})")
+            return False
+
+    @staticmethod
+    def set_bounded_numeric_feature(cam, name, target):
+        """カメラが許容する範囲内に丸めて数値Featureを設定する。"""
+        try:
+            feature = getattr(cam, name)
+            minimum, maximum = feature.get_range()
+            value = min(max(target, minimum), maximum)
+            feature.set(value)
+            print(f"カメラ設定: {name}={value} (範囲: {minimum}..{maximum})")
+            return True
+        except Exception as exc:
+            print(f"カメラ設定をスキップ: {name}={target} ({exc})")
+            return False
+
+    @staticmethod
+    def configure_low_bandwidth_pixel_format(cam):
+        """カラー情報を保ったまま転送量の少ない8-bit Bayer形式を選ぶ。"""
+        from vmbpy import PixelFormat
+
+        preferred_formats = (
+            PixelFormat.BayerRG8,
+            PixelFormat.BayerGR8,
+            PixelFormat.BayerGB8,
+            PixelFormat.BayerBG8,
+            PixelFormat.Mono8,
+        )
+        try:
+            supported = cam.get_pixel_formats()
+            for pixel_format in preferred_formats:
+                if pixel_format in supported:
+                    cam.set_pixel_format(pixel_format)
+                    print(f"カメラ設定: PixelFormat={pixel_format}")
+                    return True
+            print(f"低帯域ピクセル形式を利用できません。対応形式: {supported}")
+        except Exception as exc:
+            print(f"ピクセル形式設定をスキップ: {exc}")
+        return False
+
+    def start_camera_streaming(self):
+        """GenTLの実装差を吸収してストリーミングを開始する。"""
+        from vmbpy import AllocationMode
+
+        errors = []
+        modes = (
+            AllocationMode.AllocAndAnnounceFrame,
+            AllocationMode.AnnounceFrame,
+        )
+        for allocation_mode in modes:
+            try:
+                self.cam.start_streaming(
+                    self.frame_callback,
+                    buffer_count=30,
+                    allocation_mode=allocation_mode,
+                )
+                self.allocation_mode = allocation_mode.name
+                print(f"フレームバッファ方式: {allocation_mode.name}")
+                return
+            except Exception as exc:
+                errors.append(f"{allocation_mode.name}: {exc}")
+                print(f"ストリーミング開始を再試行します ({errors[-1]})")
+                self.run_optional_command(self.cam, 'AcquisitionStop')
+                time.sleep(0.2)
+        raise RuntimeError(" / ".join(errors))
 
     def run(self):
-        from vmbpy import VmbSystem, Frame, FrameStatus
-        vmb = VmbSystem.get_instance()
-        with vmb:
-            cams = vmb.get_all_cameras()
-            if not cams:
-                print("フレームカメラが見つかりませんでした。")
-                return
-            cam = cams[0]
-            with cam:
-                self.cam = cam  # カメラインスタンスを保持
-                cam.LineMode.set('Output')
-                cam.LineSource.set('ExposureActive')
-                cam.TriggerSource.set('Line0')
-                cam.LineInverter.set(True)
-                # 初期状態ではフレームレート制御を無効化しておく
-                cam.AcquisitionFrameRateEnable.set(False)
-                print("トリガアウト設定完了")
-                frame_sensor_w, frame_sensor_h = g_calc.get_cencer_size(
-                    (FRAME_RESOLUTION_W, FRAME_RESOLUTION_H),
-                    (FRAME_PIXCEL_W, FRAME_PIXCEL_H))
-                event_sensor_w, event_sensor_h = g_calc.get_cencer_size(
-                    (EVENT_RESOLUTION_W, EVENT_RESOLUTION_H),
-                    (EVENT_PIXCEL_W, EVENT_PIXCEL_H))
-                frame_trim_w, frame_trim_h = g_calc.get_trim_pixel_size(
-                    (FRAME_RESOLUTION_W, FRAME_RESOLUTION_H),
-                    (EVENT_RESOLUTION_W, EVENT_RESOLUTION_H),
-                    (frame_sensor_w, frame_sensor_h),
-                    (event_sensor_w, event_sensor_h))
-                frame_roi_w = FRAME_RESOLUTION_W - (frame_trim_w * 2)
-                frame_roi_h = FRAME_RESOLUTION_H - (frame_trim_h * 2)
-                ((frame_roi_w, frame_roi_h), (frame_trim_w, frame_trim_h)) = g_calc.get_adjusted_roi(
-                    (frame_roi_w, frame_roi_h),
-                    (frame_trim_w, frame_trim_h))
-                adjust_w, adjust_h = ADJUST_VIEW_W, ADJUST_VIEW_H
-                g_value.img_trim_width  = int(frame_roi_w)
-                g_value.img_trim_height = int(frame_roi_h)
-                g_value.img_trim_offset_x = int(frame_trim_w - g_calc.get_adjusted_offset(adjust_w))
-                g_value.img_trim_offset_y = int(frame_trim_h + g_calc.get_adjusted_offset(adjust_h))
-                g_value.write_frame_id_x = 40 + g_value.img_trim_offset_x
-                g_value.write_frame_id_y = 60 + g_value.img_trim_offset_y
-                print("センサーサイズおよびROI設定完了")
-                cam.start_streaming(self.frame_callback)
-                while self.running:
-                    time.sleep(0.01)
-                cam.stop_streaming()
+        from vmbpy import VmbSystem
+        try:
+            with VmbSystem.get_instance() as vmb:
+                cams = vmb.get_all_cameras()
+                if not cams:
+                    self.last_error = "フレームカメラが見つかりません。"
+                    print(self.last_error)
+                    return
+                cam = cams[0]
+                with cam:
+                    self.cam = cam
+                    print(f"フレームカメラ: {cam.get_id()} / {cam.get_name()} / {cam.get_model()}")
+
+                    # 前回の異常終了で撮像状態が残っていても、既知の状態から開始する。
+                    self.run_optional_command(cam, 'AcquisitionStop')
+
+                    # このカメラはEVSへ同期信号を出す側なので、撮像自体はフリーランにする。
+                    self.set_optional_feature(cam, 'AcquisitionMode', 'Continuous')
+                    self.set_optional_feature(cam, 'TriggerSelector', 'FrameStart')
+                    self.set_optional_feature(cam, 'TriggerMode', 'Off')
+
+                    # フル解像度RGBの帯域超過を避け、EVSとの同時接続に余裕を持たせる。
+                    self.configure_low_bandwidth_pixel_format(cam)
+                    self.set_bounded_numeric_feature(
+                        cam, 'DeviceLinkThroughputLimit', 100_000_000)
+
+                    # 同期出力は機種ごとの差が大きいため、未対応でも映像取得を継続する。
+                    self.set_optional_feature(cam, 'LineSelector', 'Line0')
+                    self.set_optional_feature(cam, 'LineMode', 'Output')
+                    self.set_optional_feature(cam, 'LineSource', 'ExposureActive')
+                    self.set_optional_feature(cam, 'LineInverter', True)
+                    # 同時接続するEVSとUSB帯域を競合させない初期値にする。
+                    self.set_optional_feature(cam, 'AcquisitionFrameRateEnable', True)
+                    self.set_optional_feature(cam, 'AcquisitionFrameRate', DEFAULT_FRAME_RATE)
+
+                    frame_sensor_w, frame_sensor_h = g_calc.get_cencer_size(
+                        (FRAME_RESOLUTION_W, FRAME_RESOLUTION_H),
+                        (FRAME_PIXCEL_W, FRAME_PIXCEL_H))
+                    event_sensor_w, event_sensor_h = g_calc.get_cencer_size(
+                        (EVENT_RESOLUTION_W, EVENT_RESOLUTION_H),
+                        (EVENT_PIXCEL_W, EVENT_PIXCEL_H))
+                    frame_trim_w, frame_trim_h = g_calc.get_trim_pixel_size(
+                        (FRAME_RESOLUTION_W, FRAME_RESOLUTION_H),
+                        (EVENT_RESOLUTION_W, EVENT_RESOLUTION_H),
+                        (frame_sensor_w, frame_sensor_h),
+                        (event_sensor_w, event_sensor_h))
+                    frame_roi_w = FRAME_RESOLUTION_W - (frame_trim_w * 2)
+                    frame_roi_h = FRAME_RESOLUTION_H - (frame_trim_h * 2)
+                    ((frame_roi_w, frame_roi_h), (frame_trim_w, frame_trim_h)) = g_calc.get_adjusted_roi(
+                        (frame_roi_w, frame_roi_h),
+                        (frame_trim_w, frame_trim_h))
+                    adjust_w, adjust_h = ADJUST_VIEW_W, ADJUST_VIEW_H
+                    g_value.img_trim_width = int(frame_roi_w)
+                    g_value.img_trim_height = int(frame_roi_h)
+                    g_value.img_trim_offset_x = int(frame_trim_w - g_calc.get_adjusted_offset(adjust_w))
+                    g_value.img_trim_offset_y = int(frame_trim_h + g_calc.get_adjusted_offset(adjust_h))
+                    g_value.write_frame_id_x = 40 + g_value.img_trim_offset_x
+                    g_value.write_frame_id_y = 60 + g_value.img_trim_offset_y
+                    print("センサーサイズおよびROI設定完了")
+
+                    self.start_camera_streaming()
+                    print("フレームカメラのストリーミングを開始しました。")
+                    while self.running:
+                        time.sleep(0.01)
+                    cam.stop_streaming()
+        except Exception as exc:
+            self.last_error = f"フレームカメラ初期化エラー: {exc}"
+            print(self.last_error)
+        finally:
+            self.cam = None
 
     def frame_callback(self, cam, stream, frame):
-        from vmbpy import FrameStatus
-        if frame.get_status() == FrameStatus.Complete:
+        from vmbpy import FrameStatus, PixelFormat
+        self.callback_count += 1
+        frame_status = frame.get_status()
+        self.last_frame_status = str(frame_status)
+        frame_np = None
+        if frame_status == FrameStatus.Complete:
             try:
-                frame_np = frame.as_opencv_image()
-            except ValueError as e:
-                if "Rgb8" in str(e):
-                    h = frame.get_height()
-                    w = frame.get_width()
-                    frame_np = np.frombuffer(frame.get_buffer(), dtype=np.uint8).reshape((h, w, 3))
-                    frame_np = cv2.cvtColor(frame_np, cv2.COLOR_RGB2BGR)
-                else:
-                    return
-            try:
-                self.frame_queue.put_nowait(frame_np)
-            except queue.Full:
-                pass
-            if self.external_callback:
+                # SDKバッファは直後に返却するため、独立した領域へコピーする。
+                frame_np = frame.as_opencv_image().copy()
+            except ValueError:
                 try:
-                    self.external_callback(frame_np)
-                except Exception as e:
-                    print("外部コールバックエラー:", e)
+                    converted = frame.convert_pixel_format(PixelFormat.Bgr8)
+                    frame_np = converted.as_opencv_image().copy()
+                except Exception as exc:
+                    self.last_error = f"ピクセル形式の変換エラー: {exc}"
+            if frame_np is not None and frame_np.ndim == 2:
+                frame_np = cv2.cvtColor(frame_np, cv2.COLOR_GRAY2BGR)
+            if frame_np is not None:
+                self.frame_count += 1
+                self.last_error = None
+        else:
+            self.last_error = f"不完全なフレームを受信しました: {frame_status}"
+
+        # JPEG変換などより先にSDKバッファを返し、受信バッファの枯渇を防ぐ。
         try:
             cam.queue_frame(frame)
         except Exception as e:
             print("Error re-queuing frame:", e)
+
+        if frame_np is not None and self.external_callback:
+            try:
+                self.external_callback(frame_np)
+            except Exception as exc:
+                print("外部コールバックエラー:", exc)
 
     def stop(self):
         self.running = False
@@ -231,7 +367,7 @@ class CameraThread(threading.Thread):
             self.cam.AcquisitionFrameRateEnable.set(True)
             self.cam.AcquisitionFrameRate.set(float(fps))
             # ストリーミング再開
-            self.cam.start_streaming(self.frame_callback)
+            self.start_camera_streaming()
             return True, self.cam.AcquisitionFrameRate.get()
         except Exception as e:
             return False, str(e)
@@ -244,7 +380,6 @@ class FrameStreamer:
         self.save_location = save_location
         self.display_factor = display_factor
         self.save_filename = ""  # ファイル名設定
-        self.latest_frame = None  # 最新フレーム（PIL Image）
         self.latest_frame_jpeg = None  # JPEG エンコード済みフレーム
         self.recording = False
         self.recording_file = None
@@ -289,10 +424,6 @@ class FrameStreamer:
             if ret:
                 self.latest_frame_jpeg = jpeg_buf.tobytes()
 
-            # 必要に応じて PIL 形式も保持（互換性維持用）
-            pil_image = Image.fromarray(cv2.cvtColor(display_np, cv2.COLOR_BGR2RGB))
-            self.latest_frame = pil_image.copy()
-
             if self.recording and self.recording_queue is not None:
                 try:
                     self.recording_queue.put_nowait(cropped_frame_np.copy())
@@ -302,6 +433,12 @@ class FrameStreamer:
             print("フレーム変換エラー:", e)
 
     def start_recording(self, mode: str = "mp4"):
+        if mode not in {"mp4", "images"}:
+            print("未対応の録画形式です:", mode)
+            return False
+        if self.cam_thread.cam is None:
+            print("フレームカメラが初期化されていません。")
+            return False
         if not self.recording:
             now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             folder_name = f"{now}_{self.save_filename}" if self.save_filename else now
@@ -311,7 +448,7 @@ class FrameStreamer:
             self.recording_mode = mode
 
             current_config = load_config()
-            snapshot_path = save_config_snapshot(current_config, self.save_location)
+            snapshot_path = save_config_snapshot(current_config, folder_path, prefix="frame_config")
             print("設定スナップショットを保存しました:", snapshot_path)
 
             self.recording_queue = queue.Queue(maxsize=FRAME_QUEUE_SIZE)
@@ -369,8 +506,7 @@ class FrameStreamer:
         return False
 
     def update_save_settings(self, save_location, save_filename):
-        self.save_location = save_location
-        self.save_filename = save_filename
+        self.save_location, self.save_filename = normalize_save_settings(save_location, save_filename)
         print(f"保存設定更新: 保存先={self.save_location}, ファイル名のプレフィックス={self.save_filename}")
         return True
 
@@ -403,12 +539,13 @@ def video_feed():
 
 @app.route('/set_save', methods=['POST'])
 def set_save():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     save_location = data.get('save_location')
     save_filename = data.get('save_filename')
-    if save_location is None:
-        return jsonify({"status": "error", "message": "保存先が指定されていません。"}), 400
-    frame_streamer_instance.update_save_settings(save_location, save_filename)
+    try:
+        frame_streamer_instance.update_save_settings(save_location, save_filename)
+    except (OSError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
     return jsonify({"status": "success", "message": "保存設定を更新しました。"})
 
 @app.route('/start_recording', methods=['POST'])
@@ -416,17 +553,56 @@ def start_recording():
     data = request.get_json() or {}
     mode = data.get('mode', 'mp4')
     success = frame_streamer_instance.start_recording(mode)
-    return jsonify({"status": "success" if success else "error", "message": "録画開始。"})
+    message = "Frame 録画を開始しました。" if success else "Frame 録画を開始できませんでした。"
+    return jsonify({"status": "success" if success else "error", "message": message}), 200 if success else 409
 
 @app.route('/stop_recording', methods=['POST'])
 def stop_recording():
     success = frame_streamer_instance.stop_recording()
-    return jsonify({"status": "success" if success else "error", "message": "録画停止。"})
+    message = "Frame 録画を停止しました。" if success else "Frame は録画中ではありません。"
+    return jsonify({"status": "success" if success else "error", "message": message}), 200 if success else 409
+
+
+@app.route('/status')
+def status():
+    camera_ready = bool(frame_streamer_instance and frame_streamer_instance.cam_thread.cam)
+    camera_thread = frame_streamer_instance.cam_thread if frame_streamer_instance else None
+    camera_settings = {}
+    if camera_ready:
+        for feature_name in (
+                'AcquisitionMode', 'TriggerSelector', 'TriggerMode', 'TriggerSource',
+                'AcquisitionFrameRateEnable', 'AcquisitionFrameRate',
+                'DeviceLinkThroughputLimit', 'ExposureAuto', 'ExposureTime',
+                'Width', 'Height'):
+            try:
+                feature_value = getattr(camera_thread.cam, feature_name).get()
+                if isinstance(feature_value, (bool, float, int, str)) or feature_value is None:
+                    camera_settings[feature_name] = feature_value
+                else:
+                    camera_settings[feature_name] = str(feature_value)
+            except Exception as exc:
+                camera_settings[feature_name] = f"取得不可: {exc}"
+        try:
+            camera_settings['PixelFormat'] = str(camera_thread.cam.get_pixel_format())
+        except Exception as exc:
+            camera_settings['PixelFormat'] = f"取得不可: {exc}"
+    return jsonify({
+        "status": "success",
+        "streaming": camera_ready,
+        "frame_ready": bool(frame_streamer_instance and frame_streamer_instance.latest_frame_jpeg),
+        "recording": bool(frame_streamer_instance and frame_streamer_instance.recording),
+        "callback_count": camera_thread.callback_count if camera_thread else 0,
+        "frame_count": camera_thread.frame_count if camera_thread else 0,
+        "last_frame_status": camera_thread.last_frame_status if camera_thread else None,
+        "allocation_mode": camera_thread.allocation_mode if camera_thread else None,
+        "message": camera_thread.last_error if camera_thread else "カメラを初期化していません。",
+        "camera_settings": camera_settings,
+    })
 
 # --- Exposure 設定用 API エンドポイント ---
 @app.route('/set_exposure', methods=['POST'])
 def set_exposure():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     mode = data.get('mode')
     if mode not in ['Once', 'Continuous', 'Manual']:
         return jsonify({"status": "error", "message": "Invalid mode specified. Use 'Once', 'Continuous', or 'Manual'."}), 400
@@ -467,7 +643,7 @@ def set_exposure():
 # --- Gain 設定用 API エンドポイント ---
 @app.route('/set_gain', methods=['POST'])
 def set_gain():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     mode = data.get('mode')
     if mode not in ['Once', 'Continuous', 'Manual']:
         return jsonify({"status": "error", "message": "Invalid mode specified. Use 'Once', 'Continuous', or 'Manual'."}), 400
@@ -508,13 +684,16 @@ def set_gain():
 # --- FrameRate 設定用 API エンドポイント ---
 @app.route('/set_framerate', methods=['POST'])
 def set_framerate():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     fps = data.get('fps')
     if fps is None:
         return jsonify({"status": "error", "message": "fps not provided."}), 400
     try:
+        fps = float(fps)
+        if not math.isfinite(fps) or fps <= 0:
+            return jsonify({"status": "error", "message": "fps must be a positive finite number."}), 400
         cam_thread = frame_streamer_instance.cam_thread
-        success, result = cam_thread.set_framerate(float(fps))
+        success, result = cam_thread.set_framerate(fps)
         if not success:
             return jsonify({"status": "error", "message": result}), 500
         return jsonify({"status": "success", "fps": result})
@@ -524,7 +703,7 @@ def set_framerate():
 # --- FrameRate モード切替用 API エンドポイント ---
 @app.route('/set_framerate_mode', methods=['POST'])
 def set_framerate_mode():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     mode = data.get('mode')
     if mode not in ['Manual', 'Auto']:
         return jsonify({"status": "error", "message": "Invalid mode specified. Use 'Manual' or 'Auto'."}), 400
@@ -543,7 +722,7 @@ def set_framerate_mode():
 # --- WhiteBalance 設定用 API エンドポイント ---
 @app.route('/set_whitebalance', methods=['POST'])
 def set_whitebalance():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     mode = data.get('mode')
     if mode not in ['Once', 'Continuous']:
         return jsonify({"status": "error", "message": "Invalid mode specified. Use 'Once' or 'Continuous'."}), 400
@@ -576,7 +755,7 @@ def get_settings():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 def run_flask_server(port):
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='127.0.0.1', port=port, debug=False)
 
 #######################################
 # メイン処理
@@ -592,6 +771,9 @@ if __name__ == "__main__":
     parser.add_argument('--display-factor', dest='display_factor', type=float, default=0.6,
                         help="表示用に縮小する倍率 (0-1). 値を小さくするとCPU負荷を減らせます")
     args = parser.parse_args()
+
+    if not 0 < args.display_factor <= 1:
+        parser.error("--display-factor は 0 より大きく 1 以下にしてください")
 
     # グローバル変数に FrameStreamer インスタンスをセット
     frame_streamer_instance = FrameStreamer(args.save_location, display_factor=args.display_factor)

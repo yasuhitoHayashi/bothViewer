@@ -7,11 +7,9 @@ import argparse
 import os
 import threading
 import time
-import signal
 from datetime import datetime
 
 import cv2
-from PIL import Image
 
 from flask import Flask, Response, request, jsonify
 from metavision_core.event_io import EventsIterator, LiveReplayEventsIterator, is_live_camera
@@ -20,7 +18,20 @@ from metavision_sdk_ui import EventLoop
 from metavision_core.event_io.raw_reader import initiate_device
 
 # 追加：YAML 設定管理用モジュール
-from config_manager import load_config, save_config, save_config_snapshot
+from config_manager import load_config, save_config_snapshot
+
+evs_streamer_instance = None
+
+
+def normalize_save_settings(save_location, save_filename):
+    if not isinstance(save_location, str) or not save_location.strip():
+        raise ValueError("保存先フォルダを指定してください。")
+    location = os.path.abspath(os.path.expanduser(save_location.strip()))
+    filename = (save_filename or "").strip()
+    if os.path.basename(filename) != filename or filename in {".", ".."}:
+        raise ValueError("ファイル名にフォルダ区切りは使用できません。")
+    os.makedirs(location, exist_ok=True)
+    return location, filename
 
 # --------------------------------------------------
 # EVSStreamer クラス（Tkinter 不使用版）
@@ -59,7 +70,6 @@ class EVSStreamer:
         self.height = int(self.orig_height * self.display_factor)
 
         # 最新フレーム保持
-        self.latest_frame = None  # PIL Image 形式（互換用）
         self.latest_frame_jpeg = None  # JPEG エンコード済みバイト列
 
         # 録画状態
@@ -106,9 +116,6 @@ class EVSStreamer:
             if ret:
                 self.latest_frame_jpeg = jpeg_buf.tobytes()
 
-            # 必要に応じて PIL 形式も保持（互換性維持用）
-            pil_image = Image.fromarray(cv2.cvtColor(frame_np, cv2.COLOR_BGR2RGB))
-            self.latest_frame = pil_image.copy()
         except Exception as e:
             print("EVS フレーム変換エラー:", e)
 
@@ -155,8 +162,7 @@ class EVSStreamer:
             return False
 
     def update_save_settings(self, save_location, save_filename):
-        self.save_location = save_location
-        self.save_filename = save_filename
+        self.save_location, self.save_filename = normalize_save_settings(save_location, save_filename)
         print(f"保存設定更新: 保存先={self.save_location}, ファイル名={self.save_filename}")
         return True
 
@@ -167,7 +173,7 @@ class EVSStreamer:
         if not self.recording:
             # 録画開始時に現在の設定をスナップショットとして保存
             current_config = load_config()
-            snapshot_path = save_config_snapshot(current_config, self.save_location)
+            snapshot_path = save_config_snapshot(current_config, self.save_location, prefix="event_config")
             print("設定スナップショットを保存しました:", snapshot_path)
 
             # タイムスタンプ取得
@@ -228,45 +234,60 @@ def video_feed():
 
 @app.route('/set_save', methods=['POST'])
 def set_save():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     save_location = data.get('save_location')
     save_filename = data.get('save_filename')
-    if save_location is None:
-        return jsonify({"status": "error", "message": "保存先が指定されていません。"}), 400
-    evs_streamer_instance.update_save_settings(save_location, save_filename)
+    try:
+        evs_streamer_instance.update_save_settings(save_location, save_filename)
+    except (OSError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
     return jsonify({"status": "success", "message": "保存設定を更新しました。"})
 
 @app.route('/set_bias', methods=['POST'])
 def set_bias():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     bias_diff_on = data.get('bias_diff_on')
     bias_diff_off = data.get('bias_diff_off')
     if bias_diff_on is None or bias_diff_off is None:
         return jsonify({"status": "error", "message": "Bias 設定の値が不足しています。"}), 400
     success = evs_streamer_instance.update_bias(bias_diff_on, bias_diff_off)
-    return jsonify({"status": "success" if success else "error", "message": "Bias 設定更新完了。"})
+    message = "Bias 設定を更新しました。" if success else "Bias インターフェースを利用できません。"
+    return jsonify({"status": "success" if success else "error", "message": message}), 200 if success else 503
 
 @app.route('/set_trigger', methods=['POST'])
 def set_trigger():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     trigger = data.get('trigger')
     if trigger is None:
         return jsonify({"status": "error", "message": "Trigger の値が不足しています。"}), 400
     success = evs_streamer_instance.update_trigger(trigger)
-    return jsonify({"status": "success" if success else "error", "message": "Trigger 設定更新完了。"})
+    message = "Trigger 設定を更新しました。" if success else "Trigger 設定を更新できませんでした。"
+    return jsonify({"status": "success" if success else "error", "message": message}), 200 if success else 503
 
 @app.route('/start_recording', methods=['POST'])
 def start_recording():
     success = evs_streamer_instance.start_recording()
-    return jsonify({"status": "success" if success else "error", "message": "録画開始。"})
+    message = "EVS 録画を開始しました。" if success else "EVS 録画を開始できませんでした。"
+    return jsonify({"status": "success" if success else "error", "message": message}), 200 if success else 409
 
 @app.route('/stop_recording', methods=['POST'])
 def stop_recording():
     success = evs_streamer_instance.stop_recording()
-    return jsonify({"status": "success" if success else "error", "message": "録画停止。"})
+    message = "EVS 録画を停止しました。" if success else "EVS は録画中ではありません。"
+    return jsonify({"status": "success" if success else "error", "message": message}), 200 if success else 409
+
+
+@app.route('/status')
+def status():
+    return jsonify({
+        "status": "success",
+        "streaming": bool(evs_streamer_instance and evs_streamer_instance.running),
+        "frame_ready": bool(evs_streamer_instance and evs_streamer_instance.latest_frame_jpeg),
+        "recording": bool(evs_streamer_instance and evs_streamer_instance.recording),
+    })
 
 def run_flask_server(port):
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='127.0.0.1', port=port, debug=False)
 
 # --------------------------------------------------
 # メイン処理
@@ -284,6 +305,9 @@ if __name__ == "__main__":
     parser.add_argument('--display-factor', dest='display_factor', type=float, default=0.8,
                         help="表示用に縮小する倍率 (0-1). 値を小さくするとCPU負荷を減らせます")
     args = parser.parse_args()
+
+    if not 0 < args.display_factor <= 1:
+        parser.error("--display-factor は 0 より大きく 1 以下にしてください")
 
     # グローバル変数に EVSStreamer インスタンスをセット
     evs_streamer_instance = EVSStreamer(
