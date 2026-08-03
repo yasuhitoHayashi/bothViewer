@@ -4,10 +4,22 @@
 Licensed under the Apache License, Version 2.0.
 """
 import os
+import re
 import yaml
 from datetime import datetime
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.yaml")
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def create_session_directory(save_location, session_id):
+    """検証済みsession_idで共通の記録ディレクトリを作成する。"""
+    if not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError("session_id は英数字・ピリオド・ハイフン・アンダースコアのみ使用できます。")
+    base_directory = os.path.abspath(os.path.expanduser(save_location))
+    session_directory = os.path.join(base_directory, session_id)
+    os.makedirs(session_directory, exist_ok=True)
+    return session_directory
 
 def load_config():
     if not os.path.exists(CONFIG_FILE):
@@ -20,6 +32,14 @@ def load_config():
             "frameCam": {
                 "exposure": "Once",
                 "frameRate": 10,
+                "bandwidthPreset": "safe",
+                "externalTrigger": {
+                    "enabled": False,
+                    "source": "Line1",
+                    "activation": "RisingEdge",
+                    "outputLine": "Line0",
+                    "outputInverter": True,
+                },
                 "gain": {"mode": "Manual", "value": 0}
             },
             "recording": {

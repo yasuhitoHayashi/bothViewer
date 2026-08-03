@@ -151,9 +151,21 @@ Licensed under the Apache License, Version 2.0.
     .check-row { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; color: #cbd5e1; font-size: 13px; }
     .check-row input { width: 18px; min-height: 18px; accent-color: var(--accent-strong); }
     .help { margin: -4px 0 12px; color: var(--muted); font-size: 11px; }
+    .help.warning { color: var(--warning); }
 
     .record-panel { margin-top: 14px; padding: 14px; border: 1px solid rgba(84,210,210,.25); border-radius: var(--radius); background: linear-gradient(135deg, rgba(43,183,188,.09), rgba(17,23,34,.95)); }
     .record-panel h3 { margin: 0 0 12px; font-size: 13px; }
+    .record-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+    .record-panel-heading h3 { margin-bottom: 4px; }
+    .record-panel-heading .session-label { margin-bottom: 0; }
+    .record-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+    .viewer-record-panel .quality-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); margin-bottom: 0; }
+    .session-label { overflow: hidden; margin: 0 0 10px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .quality-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-bottom: 12px; }
+    .quality-metric { padding: 8px; border: 1px solid var(--border); border-radius: 9px; background: rgba(3,5,7,.35); text-align: center; }
+    .quality-metric strong { display: block; font-size: 15px; font-variant-numeric: tabular-nums; }
+    .quality-metric span { display: block; color: var(--muted); font-size: 9px; }
+    .quality-metric.alert strong { color: var(--danger); }
 
     .toast-region { position: fixed; z-index: 50; top: 82px; right: 24px; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
     .toast { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 11px; background: #17202d; box-shadow: 0 14px 38px rgba(0,0,0,.34); font-size: 13px; animation: toast-in .2s ease-out; }
@@ -185,6 +197,9 @@ Licensed under the Apache License, Version 2.0.
       details { margin-bottom: 9px; }
       .stream-stage { min-height: 210px; }
       .field-row { grid-template-columns: 1fr; }
+      .record-panel-heading { align-items: stretch; flex-direction: column; }
+      .record-actions { display: grid; grid-template-columns: 1fr 1fr; }
+      .viewer-record-panel .quality-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .toast-region { top: 72px; right: 16px; }
     }
   </style>
@@ -207,6 +222,7 @@ Licensed under the Apache License, Version 2.0.
       <div class="viewer-toolbar">
         <h1 id="viewerTitle">ライブビュー</h1>
         <div class="toolbar-actions">
+          <button id="evsReconnectButton" class="btn" type="button" data-action="reconnectEvs">EVSを再接続</button>
           <button id="layoutButton" class="btn" type="button">縦に並べる</button>
         </div>
       </div>
@@ -214,7 +230,7 @@ Licensed under the Apache License, Version 2.0.
         <article class="video-card">
           <header class="video-card-header">
             <span class="video-title"><span id="evsCardDot" class="status-dot"></span>イベントカメラ</span>
-            <span class="video-meta">EVS · 5001</span>
+            <span id="evsConnectionMeta" class="video-meta">EVS · 接続中</span>
           </header>
           <div class="stream-stage">
             <img id="evsVideo" src="http://127.0.0.1:5001/video_feed" alt="イベントカメラのライブ映像">
@@ -224,7 +240,7 @@ Licensed under the Apache License, Version 2.0.
         <article class="video-card">
           <header class="video-card-header">
             <span class="video-title"><span id="frameCardDot" class="status-dot"></span>フレームカメラ</span>
-            <span class="video-meta">FRAME · 5002</span>
+            <span id="frameConnectionMeta" class="video-meta">FRAME · 接続中</span>
           </header>
           <div class="stream-stage">
             <img id="frameVideo" src="http://127.0.0.1:5002/video_feed" alt="フレームカメラのライブ映像">
@@ -232,6 +248,34 @@ Licensed under the Apache License, Version 2.0.
           </div>
         </article>
       </div>
+      <section class="record-panel viewer-record-panel" aria-labelledby="recordTitle">
+        <div class="record-panel-heading">
+          <div>
+            <h3 id="recordTitle">計測セッション</h3>
+            <p id="sessionLabel" class="session-label">待機中 · EVS相当ROIの8-bit Bayer PGM + EVS RAW</p>
+          </div>
+          <div class="record-actions">
+            <button id="recordButton" class="btn btn-danger" type="button" data-action="startRecording">● 録画開始</button>
+            <button id="stopButton" class="btn btn-stop" type="button" data-action="stopRecording">停止</button>
+          </div>
+        </div>
+        <div class="quality-grid" aria-label="録画品質">
+          <div class="quality-metric"><strong id="completeMetric">0</strong><span>受信フレーム</span></div>
+          <div class="quality-metric"><strong id="savedMetric">0</strong><span>保存済み</span></div>
+          <div class="quality-metric"><strong id="triggerMetric">0</strong><span>基準edge</span></div>
+          <div id="incompleteMetricBox" class="quality-metric"><strong id="incompleteMetric">0</strong><span>不完全</span></div>
+          <div id="gapMetricBox" class="quality-metric"><strong id="gapMetric">0</strong><span>ID欠番</span></div>
+          <div id="dropMetricBox" class="quality-metric"><strong id="dropMetric">0</strong><span>キュー落ち</span></div>
+          <div id="writeFailureMetricBox" class="quality-metric"><strong id="writeFailureMetric">0</strong><span>保存失敗</span></div>
+          <div class="quality-metric"><strong id="queueMetric">0</strong><span>待機画像</span></div>
+          <div class="quality-metric"><strong id="saveFpsMetric">0.0</strong><span>保存fps</span></div>
+          <div class="quality-metric"><strong id="writeRateMetric">0.0</strong><span>保存MB/s</span></div>
+          <div class="quality-metric"><strong id="elapsedMetric">0.0</strong><span>経過秒</span></div>
+          <div class="quality-metric"><strong id="frameReconnectMetric">0</strong><span>Frame復旧</span></div>
+          <div class="quality-metric"><strong id="evsReconnectMetric">0</strong><span>EVS復旧</span></div>
+          <div class="quality-metric"><strong id="roiMetric">—</strong><span>保存ROI</span></div>
+        </div>
+      </section>
     </section>
 
     <aside class="control-panel" aria-labelledby="controlTitle">
@@ -259,10 +303,26 @@ Licensed under the Apache License, Version 2.0.
       </details>
 
       <details>
-        <summary>外部トリガー</summary>
+        <summary>外部トリガー駆動</summary>
         <div class="details-body">
-          <label class="check-row"><input id="trigger_in" type="checkbox">Trigger In を有効にする</label>
-          <button class="btn btn-primary btn-block" type="button" data-action="setTrigger">トリガー設定を反映</button>
+          <label class="check-row"><input id="frame_trigger_enabled" type="checkbox">フレームカメラを外部トリガーで撮像</label>
+          <div class="field"><label for="trigger_source">入力ライン</label><select id="trigger_source"><option value="Line1">Line1</option></select></div>
+          <div class="field"><label for="trigger_activation">有効エッジ</label><select id="trigger_activation"><option value="RisingEdge">RisingEdge</option></select></div>
+          <p class="help">Line0のExposureActive出力とEVS Trigger Inは常時有効です。外部信号は選択した入力ラインへ接続してください。</p>
+          <button class="btn btn-primary btn-block" type="button" data-action="setTrigger">駆動モードを反映</button>
+        </div>
+      </details>
+
+      <details>
+        <summary>転送帯域</summary>
+        <div class="details-body">
+          <div class="field"><label for="bandwidth_preset">フレームカメラ帯域</label><select id="bandwidth_preset">
+            <option value="safe">安全 · 100 MB/s</option>
+            <option value="standard">標準 · 150 MB/s</option>
+            <option value="high">高速 · 200 MB/s</option>
+          </select></div>
+          <p id="bandwidthHelp" class="help">不完全フレームを5秒以内に3回検出すると、一段安全側へ自動復帰します。</p>
+          <button id="bandwidthButton" class="btn btn-primary btn-block" type="button" data-action="setBandwidth">帯域を反映</button>
         </div>
       </details>
 
@@ -274,7 +334,10 @@ Licensed under the Apache License, Version 2.0.
             <button class="btn" type="button" data-action="exposureContinuous">自動露光 継続</button>
           </div>
           <div class="field"><label for="exposure_manual_value">露光時間</label><div class="input-action"><input id="exposure_manual_value" type="number" step="any"><button class="btn" type="button" data-action="setExposureManual">設定</button></div></div>
-          <div class="field"><label for="fps_manual_value">フレームレート (fps)</label><div class="input-action"><input id="fps_manual_value" type="number" min="0.1" step="0.1"><button class="btn" type="button" data-action="setFramerate">設定</button></div></div>
+          <div class="field"><label for="fps_manual_value">通常撮影フレームレート (fps)</label><div class="input-action"><input id="fps_manual_value" type="number" min="0.1" step="0.1"><button id="fpsButton" class="btn" type="button" data-action="setFramerate">設定</button></div></div>
+          <p id="fpsRangeHelp" class="help">カメラの設定可能範囲を取得中…</p>
+          <p id="fpsActualHelp" class="help">設定 — fps · 実測 — fps</p>
+          <p id="fpsTriggerHelp" class="help" hidden>外部トリガー駆動中は入力パルスがフレームタイミングを決めます。</p>
         </div>
       </details>
 
@@ -307,14 +370,6 @@ Licensed under the Apache License, Version 2.0.
         </div>
       </details>
 
-      <section class="record-panel" aria-labelledby="recordTitle">
-        <h3 id="recordTitle">同時録画</h3>
-        <div class="field"><label for="record_mode">フレームカメラの保存形式</label><select id="record_mode"><option value="mp4">MP4 動画</option><option value="images">連番画像</option></select></div>
-        <div class="button-row">
-          <button id="recordButton" class="btn btn-danger" type="button" data-action="startRecording">● 録画開始</button>
-          <button id="stopButton" class="btn btn-stop" type="button" data-action="stopRecording">停止</button>
-        </div>
-      </section>
     </aside>
   </main>
 
@@ -330,6 +385,12 @@ Licensed under the Apache License, Version 2.0.
     let intervalTimer = null;
     let recordingTimeout = null;
     let recording = false;
+    let stoppingRecording = false;
+    let activeSessionId = null;
+    let triggerOptionsLoaded = false;
+    let previousFrameOnline = false;
+    let previousEvsOnline = false;
+    let previousAutoFallbackCount = 0;
 
     const $ = (id) => document.getElementById(id);
 
@@ -384,9 +445,52 @@ Licensed under the Apache License, Version 2.0.
       showToast(data.message);
     }
 
-    async function setTrigger() {
-      const data = await post(`${API.evs}/set_trigger`, { trigger: $('trigger_in').checked });
+    async function reconnectEvs() {
+      const data = await post(`${API.evs}/reconnect`);
       showToast(data.message);
+      $('evsConnectionMeta').textContent = 'EVS · reconnecting';
+    }
+
+    async function setTrigger() {
+      const data = await post(`${API.frame}/set_external_trigger`, {
+        enabled: $('frame_trigger_enabled').checked,
+        source: value('trigger_source'),
+        activation: value('trigger_activation')
+      });
+      showToast(data.message);
+      applyTriggerConfiguration(data.configuration);
+    }
+
+    function populateSelect(id, entries, selected) {
+      const select = $(id);
+      select.replaceChildren(...entries.map((entry) => {
+        const option = document.createElement('option');
+        option.value = option.textContent = entry;
+        return option;
+      }));
+      if (entries.includes(selected)) select.value = selected;
+    }
+
+    function applyTriggerConfiguration(configuration = {}, updateInputs = true) {
+      const enabled = Boolean(configuration.enabled);
+      if (updateInputs) {
+        $('frame_trigger_enabled').checked = enabled;
+        if (configuration.source) $('trigger_source').value = configuration.source;
+        if (configuration.activation) $('trigger_activation').value = configuration.activation;
+      }
+      $('fps_manual_value').disabled = enabled;
+      $('fpsButton').disabled = enabled;
+      $('fpsTriggerHelp').hidden = !enabled;
+    }
+
+    async function loadTriggerOptions() {
+      try {
+        const data = await requestJson(`${API.frame}/trigger_options`);
+        populateSelect('trigger_source', data.sources || [], data.configuration?.source);
+        populateSelect('trigger_activation', data.activations || [], data.configuration?.activation);
+        applyTriggerConfiguration(data.configuration);
+        triggerOptionsLoaded = Boolean(data.sources?.length && data.activations?.length);
+      } catch { /* カメラ接続後の状態更新で再試行する */ }
     }
 
     async function setFrameMode(endpoint, mode, valueKey, valueId) {
@@ -401,8 +505,43 @@ Licensed under the Apache License, Version 2.0.
       const fps = finiteNumber('fps_manual_value', 'フレームレート');
       if (fps <= 0) throw new Error('フレームレートは 0 より大きい値にしてください。');
       const data = await post(`${API.frame}/set_framerate`, { fps });
-      showToast(`フレームレートを ${Number(data.fps).toFixed(1)} fps に設定しました。`);
+      showToast(data.message, data.persisted ? 'success' : 'error');
       await refreshFrameSettings();
+    }
+
+    async function setBandwidth() {
+      const data = await post(`${API.frame}/set_bandwidth_preset`, {
+        preset: value('bandwidth_preset')
+      });
+      showToast(data.message);
+      await refreshFrameSettings();
+    }
+
+    function applyFpsCapabilities(data) {
+      const minimum = Number(data.fps_min);
+      const maximum = Number(data.fps_max);
+      const increment = Number(data.fps_increment);
+      if (Number.isFinite(minimum)) $('fps_manual_value').min = minimum;
+      if (Number.isFinite(maximum)) $('fps_manual_value').max = maximum;
+      if (Number.isFinite(increment) && increment > 0) $('fps_manual_value').step = increment;
+      $('fpsRangeHelp').textContent = Number.isFinite(minimum) && Number.isFinite(maximum)
+        ? `設定可能範囲 ${minimum.toFixed(2)}〜${maximum.toFixed(2)} fps`
+        : '設定可能範囲を取得できません。';
+    }
+
+    function updateFpsReadout(configured, measured, exposure) {
+      const configuredNumber = Number(configured);
+      const measuredNumber = Number(measured);
+      $('fpsActualHelp').textContent =
+        `設定 ${Number.isFinite(configuredNumber) ? configuredNumber.toFixed(2) : '—'} fps · ` +
+        `実測 ${Number.isFinite(measuredNumber) ? measuredNumber.toFixed(2) : '—'} fps`;
+      const exposureNumber = Number(exposure);
+      const periodUs = configuredNumber > 0 ? 1_000_000 / configuredNumber : Infinity;
+      const exposureLimited = Number.isFinite(exposureNumber) && exposureNumber > periodUs;
+      $('fpsActualHelp').classList.toggle('warning', exposureLimited);
+      if (exposureLimited) {
+        $('fpsActualHelp').textContent += ` · 露光 ${exposureNumber.toFixed(0)} µsが周期を超えています`;
+      }
     }
 
     async function refreshFrameSettings() {
@@ -411,40 +550,68 @@ Licensed under the Apache License, Version 2.0.
         $('exposure_manual_value').value = data.exposure;
         $('gain_manual_value').value = data.gain;
         $('fps_manual_value').value = data.fps;
+        applyFpsCapabilities(data);
+        updateFpsReadout(data.fps, data.fps_measured, data.exposure);
       } catch { /* 起動直後やカメラ未接続時は状態表示に任せる */ }
     }
 
-    function updateRecordingUi(active) {
+    function updateRecordingUi(active, finalizing = false) {
       recording = active;
       $('recordStatus').hidden = !active;
-      $('recordButton').disabled = active;
+      $('recordButton').disabled = active || finalizing;
       $('stopButton').disabled = !active;
+      $('bandwidthButton').disabled = active || finalizing;
     }
 
     async function startRecording() {
-      const mode = value('record_mode');
-      const results = await Promise.allSettled([
-        post(`${API.evs}/start_recording`),
-        post(`${API.frame}/start_recording`, { mode })
+      await updateSave();
+      const preflight = await Promise.all([
+        requestJson(`${API.evs}/status`), requestJson(`${API.frame}/status`)
       ]);
-      const failed = results.find((result) => result.status === 'rejected');
-      if (failed) {
-        await Promise.allSettled([
-          results[0].status === 'fulfilled' ? post(`${API.evs}/stop_recording`) : Promise.resolve(),
-          results[1].status === 'fulfilled' ? post(`${API.frame}/stop_recording`) : Promise.resolve()
-        ]);
-        throw failed.reason;
+      const pixelFormat = preflight[1].camera_settings?.PixelFormat || '';
+      const externallyTriggered = Boolean(preflight[1].trigger_configuration?.enabled);
+      const frameHasData = preflight[1].frame_ready &&
+        preflight[1].last_frame_status === 'FrameStatus.Complete';
+      if (!preflight[0].streaming || !preflight[0].trigger_in || !preflight[1].streaming ||
+          (!externallyTriggered && !frameHasData)) {
+        throw new Error('両カメラとEVS Trigger Inを確認し、フリーラン時は映像受信後に録画してください。');
+      }
+      if (!/Bayer..8/.test(pixelFormat)) {
+        throw new Error(`フレームカメラが8-bit Bayerではありません（${pixelFormat || '不明'}）。`);
+      }
+      const now = new Date().toISOString().replace(/[-:]/g, '');
+      const label = value('save_filename').replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '');
+      const random = Math.random().toString(36).slice(2, 8);
+      activeSessionId = `${now}${label ? `_${label}` : ''}_${random}`;
+      await post(`${API.evs}/start_recording`, { session_id: activeSessionId });
+      try {
+        await post(`${API.frame}/start_recording`, { session_id: activeSessionId });
+      } catch (error) {
+        await Promise.allSettled([post(`${API.evs}/stop_recording`)]);
+        activeSessionId = null;
+        throw error;
       }
       updateRecordingUi(true);
-      showToast('EVS とフレームカメラの録画を開始しました。');
+      $('sessionLabel').textContent = activeSessionId;
+      showToast('計測セッションを開始しました。');
     }
 
     async function stopRecording() {
-      const results = await Promise.allSettled([post(`${API.evs}/stop_recording`), post(`${API.frame}/stop_recording`)]);
-      updateRecordingUi(false);
-      const failed = results.find((result) => result.status === 'rejected');
-      if (failed) throw failed.reason;
-      showToast('録画を停止しました。');
+      // Frameは受付停止後すぐ応答し、画像キューだけをバックグラウンドで排出する。
+      // そのためEVSを余分なExposureActiveを蓄積する前に停止できる。
+      stoppingRecording = true;
+      try {
+        const frameResult = await Promise.allSettled([post(`${API.frame}/stop_recording`)]);
+        const evsResult = await Promise.allSettled([post(`${API.evs}/stop_recording`)]);
+        updateRecordingUi(false);
+        const failed = [...frameResult, ...evsResult].find((result) => result.status === 'rejected');
+        if (failed) throw failed.reason;
+        $('sessionLabel').textContent = `完了 · ${activeSessionId || ''}`;
+        activeSessionId = null;
+        showToast('計測セッションを保存しました。');
+      } finally {
+        stoppingRecording = false;
+      }
     }
 
     async function startIntervalRecording() {
@@ -483,13 +650,77 @@ Licensed under the Apache License, Version 2.0.
       const frameOnline = checks[1].status === 'fulfilled' && checks[1].value.streaming;
       ['evsStatusDot', 'evsCardDot'].forEach((id) => $(id).classList.toggle('online', evsOnline));
       ['frameStatusDot', 'frameCardDot'].forEach((id) => $(id).classList.toggle('online', frameOnline));
+      const evsConnection = checks[0].status === 'fulfilled' ? checks[0].value.connection || {} : {};
+      const frameConnection = checks[1].status === 'fulfilled' ? checks[1].value.connection || {} : {};
+      $('evsConnectionMeta').textContent = `EVS · ${evsConnection.state || 'offline'} · 復旧${evsConnection.successful_reconnections || 0}`;
+      $('frameConnectionMeta').textContent = `FRAME · ${frameConnection.state || 'offline'} · 復旧${frameConnection.successful_reconnections || 0}`;
+      if (evsOnline && !previousEvsOnline) reconnectVideo('evsVideo', `${API.evs}/video_feed`);
+      if (frameOnline && !previousFrameOnline) reconnectVideo('frameVideo', `${API.frame}/video_feed`);
+      previousEvsOnline = evsOnline;
+      previousFrameOnline = frameOnline;
+      if (frameOnline && !triggerOptionsLoaded) loadTriggerOptions();
       if (checks[0].status === 'fulfilled' && checks[1].status === 'fulfilled') {
-        updateRecordingUi(Boolean(checks[0].value.recording || checks[1].value.recording));
+        const backendRecording = Boolean(checks[0].value.recording || checks[1].value.recording);
+        const frameFinalizing = Boolean(checks[1].value.recording_finalizing);
+        const recordingWasActive = recording;
+        updateRecordingUi(backendRecording, frameFinalizing);
+        if (recordingWasActive && !backendRecording && activeSessionId && !stoppingRecording) {
+          showToast('バックエンド再起動により録画が停止しました。保存済みセグメントを確認してください。', 'error');
+          $('sessionLabel').textContent = `中断 · ${activeSessionId}`;
+          activeSessionId = null;
+        }
+        const evsQuality = checks[0].value.recording_quality || {};
+        const frameQuality = checks[1].value.recording_quality || {};
+        const bandwidth = checks[1].value.bandwidth || {};
+        const recordingRoi = checks[1].value.recording_roi || {};
+        if (bandwidth.preset && document.activeElement !== $('bandwidth_preset')) {
+          $('bandwidth_preset').value = bandwidth.preset;
+        }
+        $('bandwidthHelp').textContent =
+          `${Number(bandwidth.limit_bytes_per_second || 0) / 1_000_000} MB/s · ` +
+          `自動復帰 ${bandwidth.auto_fallback_count || 0}回`;
+        if ((bandwidth.auto_fallback_count || 0) > previousAutoFallbackCount) {
+          showToast(`不完全フレームを検出し、帯域を「${bandwidth.preset}」へ下げました。`, 'error');
+        }
+        previousAutoFallbackCount = bandwidth.auto_fallback_count || 0;
+        updateFpsReadout(
+          checks[1].value.camera_settings?.AcquisitionFrameRate,
+          checks[1].value.measured_fps,
+          checks[1].value.camera_settings?.ExposureTime
+        );
+        $('completeMetric').textContent = frameQuality.complete || 0;
+        $('savedMetric').textContent = frameQuality.saved || 0;
+        $('incompleteMetric').textContent = frameQuality.incomplete || 0;
+        $('gapMetric').textContent = frameQuality.frame_id_missing || 0;
+        $('dropMetric').textContent = frameQuality.queue_drops || 0;
+        $('triggerMetric').textContent = checks[1].value.camera_settings?.LineInverter
+          ? (evsQuality.falling_edges || 0)
+          : (evsQuality.rising_edges || 0);
+        $('queueMetric').textContent = frameQuality.queue_depth || 0;
+        $('saveFpsMetric').textContent = Number(frameQuality.save_fps || 0).toFixed(1);
+        $('writeRateMetric').textContent = Number(
+          frameQuality.write_megabytes_per_second || 0).toFixed(1);
+        $('writeFailureMetric').textContent = frameQuality.write_failures || 0;
+        $('elapsedMetric').textContent = Number(frameQuality.elapsed_seconds || evsQuality.elapsed_seconds || 0).toFixed(1);
+        $('frameReconnectMetric').textContent = frameConnection.successful_reconnections || 0;
+        $('evsReconnectMetric').textContent = evsConnection.successful_reconnections || 0;
+        $('roiMetric').textContent = recordingRoi.width && recordingRoi.height
+          ? `${recordingRoi.width}×${recordingRoi.height}` : '—';
+        $('incompleteMetricBox').classList.toggle('alert', Boolean(frameQuality.incomplete));
+        $('gapMetricBox').classList.toggle('alert', Boolean(frameQuality.frame_id_missing));
+        $('dropMetricBox').classList.toggle('alert', Boolean(frameQuality.queue_drops));
+        $('writeFailureMetricBox').classList.toggle('alert', Boolean(frameQuality.write_failures));
+        const sessionId = frameQuality.session_id || evsQuality.session_id;
+        applyTriggerConfiguration(checks[1].value.trigger_configuration, false);
+        if (sessionId) {
+          activeSessionId = sessionId;
+          $('sessionLabel').textContent = frameFinalizing ? `保存完了処理中 · ${sessionId}` : sessionId;
+        }
       }
     }
 
     const actions = {
-      updateSave, setBias, setTrigger,
+      updateSave, setBias, reconnectEvs, setTrigger,
       exposureOnce: () => setFrameMode('set_exposure', 'Once'),
       exposureContinuous: () => setFrameMode('set_exposure', 'Continuous'),
       setExposureManual: () => setFrameMode('set_exposure', 'Manual', 'value', 'exposure_manual_value'),
@@ -498,7 +729,7 @@ Licensed under the Apache License, Version 2.0.
       setGainManual: () => setFrameMode('set_gain', 'Manual', 'value', 'gain_manual_value'),
       wbOnce: () => setFrameMode('set_whitebalance', 'Once'),
       wbContinuous: () => setFrameMode('set_whitebalance', 'Continuous'),
-      setFramerate, startRecording, stopRecording,
+      setFramerate, setBandwidth, startRecording, stopRecording,
       startInterval: startIntervalRecording,
       stopInterval: stopIntervalRecording
     };
@@ -520,6 +751,18 @@ Licensed under the Apache License, Version 2.0.
         dialog.showModal();
       });
     });
+
+    function reconnectVideo(id, baseUrl) {
+      const image = $(id);
+      image.src = `${baseUrl}?reconnect=${Date.now()}`;
+    }
+
+    $('evsVideo').addEventListener('error', () => {
+      window.setTimeout(() => reconnectVideo('evsVideo', `${API.evs}/video_feed`), 1500);
+    });
+    $('frameVideo').addEventListener('error', () => {
+      window.setTimeout(() => reconnectVideo('frameVideo', `${API.frame}/video_feed`), 1500);
+    });
     document.querySelector('.dialog-close').addEventListener('click', () => dialog.close());
     dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
     dialog.addEventListener('close', () => { $('dialogVideo').removeAttribute('src'); });
@@ -528,6 +771,7 @@ Licensed under the Apache License, Version 2.0.
     $('save_location').value = pageDirectory || '.';
     updateRecordingUi(false);
     refreshFrameSettings();
+    loadTriggerOptions();
     refreshStatus();
     window.setInterval(refreshStatus, 3000);
   </script>

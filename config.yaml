@@ -1,32 +1,39 @@
-eventCam:
-  bias:
-    diff_on: 20
-    diff_off: 20
-  triggerIn: true
-
-frameCam:
-  exposure: "Once"
-  frameRate: 10
-  gain:
-    mode: "Manual"
-    value: 0
-
-recording:
-  save_location: "./recordings"
-  file_prefix: "record"
-
 bothViewHW:
   eventCamHW:
-    resolution: [1280, 720]
     pixel:
-      width: 4.86  # um
-      height: 4.86  # um
-
+      height: 4.86
+      width: 4.86
+    resolution:
+    - 1280
+    - 720
   frameCamHW:
-    resolution: [1936, 1216]
-    pixel:
-      width: 3.45  # um
-      height: 3.45  # um
     frame_shift:
-      width: 0
       height: 0
+      width: 0
+    pixel:
+      height: 3.45
+      width: 3.45
+    resolution:
+    - 1936
+    - 1216
+eventCam:
+  bias:
+    diff_off: 20
+    diff_on: 20
+  triggerIn: true
+frameCam:
+  bandwidthPreset: high
+  exposure: Once
+  externalTrigger:
+    activation: RisingEdge
+    enabled: false
+    outputInverter: true
+    outputLine: Line0
+    source: Line1
+  frameRate: 100.0
+  gain:
+    mode: Manual
+    value: 0
+recording:
+  file_prefix: record
+  save_location: ./recordings

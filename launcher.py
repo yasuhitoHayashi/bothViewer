@@ -13,7 +13,6 @@ import sys
 
 REQUIRED_MODULES = {
     "cv2": "opencv-python",
-    "ffmpeg": "ffmpeg-python",
     "flask": "Flask",
     "h5py": "h5py",
     "metavision_core": "OpenEB / Metavision SDK",
@@ -29,13 +28,20 @@ def check_dependencies():
             if importlib.util.find_spec(module) is None]
 
 
-def stop_process(process):
-    """子プロセスが動作中の場合だけ、安全に終了する。"""
+def request_process_stop(process):
+    """待たずに終了要求を送り、複数バックエンドの停止時刻を揃える。"""
     if process.poll() is not None:
         return
     process.terminate()
+
+
+def wait_process_stop(process):
+    """終了要求済みの子プロセスが監査ファイルを閉じるまで待つ。"""
+    if process.poll() is not None:
+        return
     try:
-        process.wait(timeout=5)
+        # Bayer画像キューとCSVを閉じる時間を子プロセスへ与える。
+        process.wait(timeout=60)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
@@ -58,8 +64,11 @@ def main():
     frame_script = os.path.join(base_dir, "frameStreamer.py")
     html_file = os.path.join(base_dir, "bothViewer.html")
     
-    evs_proc = subprocess.Popen([sys.executable, evs_script, "--port", "5001"])
-    frame_proc = subprocess.Popen([sys.executable, frame_script, "--port", "5002"])
+    commands = {
+        "EVS": [sys.executable, evs_script, "--port", "5001"],
+        "Frame": [sys.executable, frame_script, "--port", "5002"],
+    }
+    processes = {name: subprocess.Popen(command) for name, command in commands.items()}
     
     time.sleep(5)
     
@@ -70,17 +79,25 @@ def main():
     
     exit_code = 0
     try:
-        while evs_proc.poll() is None and frame_proc.poll() is None:
+        while True:
+            for name, process in list(processes.items()):
+                if process.poll() is not None:
+                    print(
+                        f"{name} サーバーが終了しました (終了コード: {process.returncode})。再起動します。",
+                        file=sys.stderr,
+                    )
+                    time.sleep(1)
+                    processes[name] = subprocess.Popen(commands[name])
             time.sleep(0.5)
-        failed_name = "EVS" if evs_proc.poll() is not None else "Frame"
-        failed_code = evs_proc.poll() if evs_proc.poll() is not None else frame_proc.poll()
-        print(f"{failed_name} サーバーが終了しました (終了コード: {failed_code})", file=sys.stderr)
-        exit_code = failed_code or 1
     except KeyboardInterrupt:
         print("終了処理中...")
     finally:
-        stop_process(evs_proc)
-        stop_process(frame_proc)
+        # 両方へ先に停止要求を送り、Frameの保存キュー排出中にEVSだけが
+        # ExposureActiveを記録し続ける時間を作らない。
+        request_process_stop(processes["Frame"])
+        request_process_stop(processes["EVS"])
+        wait_process_stop(processes["Frame"])
+        wait_process_stop(processes["EVS"])
         print("終了しました。")
     return exit_code
 

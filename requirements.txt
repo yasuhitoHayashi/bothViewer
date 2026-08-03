@@ -1,4 +1,3 @@
-ffmpeg-python
 Flask
 h5py
 numpy
