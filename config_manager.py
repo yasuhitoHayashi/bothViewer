@@ -46,6 +46,10 @@ def load_config():
                 "save_location": "./recordings",
                 "file_prefix": "record"
             },
+            "preview": {
+                "preset": "standard",
+                "autoDegrade": True,
+            },
             "bothViewHW": {
                 "eventCamHW": {
                     "resolution": [1280, 720],

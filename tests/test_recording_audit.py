@@ -14,6 +14,7 @@ import numpy as np
 from evsStreamer import EVSStreamer, build_synchronization_report
 from frameStreamer import (
     CameraThread, FrameStreamer, ImageWriterThread, calculate_evs_matching_frame_roi)
+from preview_manager import LatestFramePreview
 
 
 class FakeFeature:
@@ -135,6 +136,52 @@ class FakeStreamingCamera:
 
 
 class RecordingAuditTests(unittest.TestCase):
+    def test_latest_preview_replaces_pending_frames_without_blocking_source(self):
+        preview = LatestFramePreview(
+            "test", "evs", lambda payload, _settings: payload,
+            preset="standard")
+        preview.submit(b"first")
+        preview.submit(b"latest")
+
+        status = preview.status()
+
+        self.assertEqual(status["submitted_frames"], 2)
+        self.assertEqual(status["skipped_source_frames"], 1)
+
+    def test_preview_auto_degrades_after_sustained_encoder_overload(self):
+        changes = []
+        preview = LatestFramePreview(
+            "test", "evs", lambda payload, _settings: payload,
+            preset="high_quality", auto_degrade=True,
+            on_effective_change=lambda preset, _settings: changes.append(preset))
+
+        for _ in range(5):
+            preview._update_adaptation(0.03, 1 / 30)
+
+        status = preview.status()
+        self.assertEqual(status["requested_preset"], "high_quality")
+        self.assertEqual(status["effective_preset"], "standard")
+        self.assertEqual(status["auto_degrade_count"], 1)
+        self.assertEqual(changes, ["standard"])
+
+    def test_preview_worker_encodes_latest_frame_and_stops_cleanly(self):
+        preview = LatestFramePreview(
+            "test", "evs", lambda payload, _settings: payload,
+            preset="record_priority")
+        preview.start()
+        try:
+            preview.submit(b"jpeg-data")
+            deadline = time.monotonic() + 1
+            while preview.get_jpeg() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            sequence, jpeg = preview.get_jpeg_packet()
+            self.assertEqual(sequence, 1)
+            self.assertEqual(jpeg, b"jpeg-data")
+        finally:
+            preview.stop()
+            preview.join(timeout=1)
+        self.assertFalse(preview.is_alive())
+
     def test_bayer_rg_preview_places_red_sites_in_bgr_red_channel(self):
         bayer = np.zeros((8, 8), dtype=np.uint8)
         bayer[0::2, 0::2] = 255

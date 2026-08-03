@@ -310,6 +310,20 @@ Licensed under the Apache License, Version 2.0.
         </div>
       </details>
 
+      <details open>
+        <summary>ライブ表示負荷</summary>
+        <div class="details-body">
+          <div class="field"><label for="preview_preset">表示プリセット</label><select id="preview_preset">
+            <option value="record_priority">記録優先 · 10 fps</option>
+            <option value="standard">標準 · 20 fps</option>
+            <option value="high_quality">高画質 · 30 fps</option>
+          </select></div>
+          <label class="check-row"><input id="preview_auto_degrade" type="checkbox" checked>処理が重いとき自動的に表示品質を下げる</label>
+          <p id="previewStatusHelp" class="help">表示状態を取得中…</p>
+          <button class="btn btn-primary btn-block" type="button" data-action="setPreview">表示設定を反映</button>
+        </div>
+      </details>
+
       <details>
         <summary>EVS バイアス</summary>
         <div class="details-body">
@@ -410,6 +424,8 @@ Licensed under the Apache License, Version 2.0.
     let previousFrameOnline = false;
     let previousEvsOnline = false;
     let previousAutoFallbackCount = 0;
+    let previousEvsPreviewFallbacks = 0;
+    let previousFramePreviewFallbacks = 0;
 
     const $ = (id) => document.getElementById(id);
 
@@ -468,6 +484,16 @@ Licensed under the Apache License, Version 2.0.
       const data = await post(`${API.evs}/reconnect`);
       showToast(data.message);
       $('evsConnectionMeta').textContent = 'EVS · reconnecting';
+    }
+
+    async function setPreview() {
+      const payload = {
+        preset: value('preview_preset'),
+        auto_degrade: $('preview_auto_degrade').checked
+      };
+      const frameResult = await post(`${API.frame}/set_preview`, { ...payload, persist: true });
+      await post(`${API.evs}/set_preview`, { ...payload, persist: false });
+      showToast(frameResult.message.replace('Frame', '両カメラの'));
     }
 
     async function setTrigger() {
@@ -692,8 +718,34 @@ Licensed under the Apache License, Version 2.0.
         const frameQuality = checks[1].value.recording_quality || {};
         const triggerMonitor = checks[0].value.trigger_monitor || {};
         const frameTriggerMonitor = checks[1].value.external_trigger_monitor || {};
+        const evsPreview = checks[0].value.preview || {};
+        const framePreview = checks[1].value.preview || {};
+        const evsProcessing = checks[0].value.processing || {};
         const bandwidth = checks[1].value.bandwidth || {};
         const recordingRoi = checks[1].value.recording_roi || {};
+        if (framePreview.requested_preset && document.activeElement !== $('preview_preset')) {
+          $('preview_preset').value = framePreview.requested_preset;
+        }
+        if (document.activeElement !== $('preview_auto_degrade')) {
+          $('preview_auto_degrade').checked = Boolean(framePreview.auto_degrade);
+        }
+        const previewReduced =
+          evsPreview.effective_preset !== evsPreview.requested_preset ||
+          framePreview.effective_preset !== framePreview.requested_preset ||
+          Boolean(evsProcessing.overloaded);
+        $('previewStatusHelp').classList.toggle('warning', previewReduced);
+        $('previewStatusHelp').textContent =
+          `EVS ${evsPreview.label || '—'} ${Number(evsPreview.measured_fps || 0).toFixed(1)}/${Number(evsPreview.target_fps || 0).toFixed(0)}fps ` +
+          `(${Number(evsPreview.encode_duration_ms || 0).toFixed(1)}ms, 遅延${Number(evsProcessing.decode_lag_ms || 0).toFixed(1)}ms, ` +
+          `${(Number(evsProcessing.event_rate_per_second || 0) / 1_000_000).toFixed(2)}Mev/s, 間引き${evsPreview.skipped_source_frames || 0}) · ` +
+          `Frame ${framePreview.label || '—'} ${Number(framePreview.measured_fps || 0).toFixed(1)}/${Number(framePreview.target_fps || 0).toFixed(0)}fps ` +
+          `(${Number(framePreview.encode_duration_ms || 0).toFixed(1)}ms, 間引き${framePreview.skipped_source_frames || 0})`;
+        if ((evsPreview.auto_degrade_count || 0) > previousEvsPreviewFallbacks ||
+            (framePreview.auto_degrade_count || 0) > previousFramePreviewFallbacks) {
+          showToast('処理負荷が高いため、記録を優先してライブ表示品質を自動的に下げました。', 'error');
+        }
+        previousEvsPreviewFallbacks = evsPreview.auto_degrade_count || 0;
+        previousFramePreviewFallbacks = framePreview.auto_degrade_count || 0;
         if (bandwidth.preset && document.activeElement !== $('bandwidth_preset')) {
           $('bandwidth_preset').value = bandwidth.preset;
         }
@@ -786,7 +838,7 @@ Licensed under the Apache License, Version 2.0.
     }
 
     const actions = {
-      updateSave, setBias, reconnectEvs, setTrigger,
+      updateSave, setBias, reconnectEvs, setPreview, setTrigger,
       exposureOnce: () => setFrameMode('set_exposure', 'Once'),
       exposureContinuous: () => setFrameMode('set_exposure', 'Continuous'),
       setExposureManual: () => setFrameMode('set_exposure', 'Manual', 'value', 'exposure_manual_value'),

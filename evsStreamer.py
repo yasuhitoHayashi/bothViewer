@@ -22,9 +22,16 @@ from metavision_sdk_ui import EventLoop
 from metavision_core.event_io.raw_reader import initiate_device
 
 # 追加：YAML 設定管理用モジュール
-from config_manager import create_session_directory, load_config, save_config_snapshot
+from config_manager import create_session_directory, load_config, save_config, save_config_snapshot
+from preview_manager import LatestFramePreview, PREVIEW_PRESETS
 
 evs_streamer_instance = None
+config_data = load_config()
+preview_config = config_data.get("preview", {})
+DEFAULT_PREVIEW_PRESET = str(preview_config.get("preset", "standard"))
+if DEFAULT_PREVIEW_PRESET not in PREVIEW_PRESETS:
+    DEFAULT_PREVIEW_PRESET = "standard"
+DEFAULT_PREVIEW_AUTO_DEGRADE = bool(preview_config.get("autoDegrade", True))
 
 
 def normalize_save_settings(save_location, save_filename):
@@ -238,7 +245,16 @@ class EVSStreamer:
         self.height = int(self.orig_height * self.display_factor)
 
         # 最新フレーム保持
-        self.latest_frame_jpeg = None  # JPEG エンコード済みバイト列
+        self.event_processing_lock = threading.RLock()
+        self.preview = LatestFramePreview(
+            "EVS", "evs", self.encode_preview_frame,
+            preset=DEFAULT_PREVIEW_PRESET,
+            auto_degrade=DEFAULT_PREVIEW_AUTO_DEGRADE,
+            on_effective_change=self.apply_preview_generator_settings,
+        )
+        self.preview.start()
+        self.processing_health_lock = threading.Lock()
+        self.reset_event_processing_health()
 
         # 録画状態
         self.recording = False
@@ -263,7 +279,7 @@ class EVSStreamer:
         # 固定パラメータ（累積時間、FPS）
         self.fixed_accumulation_time_ms = 33
         self.fixed_accumulation_time_us = self.fixed_accumulation_time_ms * 1000
-        self.fixed_fps = 50
+        self.fixed_fps = PREVIEW_PRESETS[DEFAULT_PREVIEW_PRESET]["fps"]
         self.event_frame_gen = None
         self.configure_event_frame_generator()
 
@@ -279,17 +295,37 @@ class EVSStreamer:
                 pass
 
     def configure_event_frame_generator(self):
-        self.width = int(self.orig_width * self.display_factor)
-        self.height = int(self.orig_height * self.display_factor)
-        self.event_frame_gen = PeriodicFrameGenerationAlgorithm(
-            sensor_width=self.orig_width,
-            sensor_height=self.orig_height,
-            accumulation_time_us=self.fixed_accumulation_time_us,
-            fps=self.fixed_fps,
-            palette=ColorPalette.Gray)
-        self.event_frame_gen.set_colors(
-            background_color=[128], on_color=[255], off_color=[0], colored=False)
-        self.event_frame_gen.set_output_callback(self.on_cd_frame_cb)
+        with self.event_processing_lock:
+            settings = self.preview.current_settings()
+            self.fixed_fps = settings["fps"]
+            self.width = int(self.orig_width * settings["evs_scale"])
+            self.height = int(self.orig_height * settings["evs_scale"])
+            self.event_frame_gen = PeriodicFrameGenerationAlgorithm(
+                sensor_width=self.orig_width,
+                sensor_height=self.orig_height,
+                accumulation_time_us=self.fixed_accumulation_time_us,
+                fps=self.fixed_fps,
+                palette=ColorPalette.Gray)
+            self.event_frame_gen.set_colors(
+                background_color=[128], on_color=[255], off_color=[0], colored=False)
+            self.event_frame_gen.set_output_callback(self.on_cd_frame_cb)
+
+    def apply_preview_generator_settings(self, _preset, settings):
+        self.fixed_fps = settings["fps"]
+        self.width = int(self.orig_width * settings["evs_scale"])
+        self.height = int(self.orig_height * settings["evs_scale"])
+        with self.event_processing_lock:
+            if self.event_frame_gen is not None:
+                self.event_frame_gen.set_fps(self.fixed_fps)
+
+    def update_preview_preferences(self, preset, auto_degrade, persist=True):
+        status = self.preview.set_preferences(preset, auto_degrade)
+        if persist:
+            config = load_config()
+            config.setdefault("preview", {})["preset"] = preset
+            config["preview"]["autoDegrade"] = bool(auto_degrade)
+            save_config(config)
+        return status
 
     def initialize_trigger_monitor(self):
         self.trigger_monitor_lock = threading.Lock()
@@ -303,6 +339,70 @@ class EVSStreamer:
             0: deque(maxlen=120),
             1: deque(maxlen=120),
         }
+
+    def reset_event_processing_health(self):
+        with self.processing_health_lock:
+            self.processing_samples = deque(maxlen=500)
+            self.sensor_to_host_offset_ns = None
+            self.decode_lag_ms = 0.0
+            self.process_duration_ema_ms = 0.0
+            self.processing_overload_streak = 0
+            self.last_lag_fallback_monotonic = 0.0
+
+    def update_event_processing_health(self, events, process_seconds):
+        host_ns = time.monotonic_ns()
+        event_count = len(events)
+        sensor_timestamp_us = None
+        if event_count:
+            try:
+                sensor_timestamp_us = int(events["t"][-1])
+            except Exception:
+                pass
+        request_fallback = False
+        with self.processing_health_lock:
+            self.processing_samples.append((host_ns, event_count, process_seconds))
+            cutoff = host_ns - 5_000_000_000
+            while self.processing_samples and self.processing_samples[0][0] < cutoff:
+                self.processing_samples.popleft()
+            elapsed_ms = process_seconds * 1000
+            self.process_duration_ema_ms = (
+                elapsed_ms if self.process_duration_ema_ms == 0
+                else self.process_duration_ema_ms * 0.9 + elapsed_ms * 0.1)
+            if sensor_timestamp_us is not None:
+                sensor_ns = sensor_timestamp_us * 1000
+                if self.sensor_to_host_offset_ns is None:
+                    self.sensor_to_host_offset_ns = host_ns - sensor_ns
+                expected_host_ns = sensor_ns + self.sensor_to_host_offset_ns
+                self.decode_lag_ms = max(0.0, (host_ns - expected_host_ns) / 1e6)
+            if self.decode_lag_ms >= 100:
+                self.processing_overload_streak += 1
+            else:
+                self.processing_overload_streak = 0
+            now = time.monotonic()
+            if (self.processing_overload_streak >= 3
+                    and now - self.last_lag_fallback_monotonic >= 5):
+                self.last_lag_fallback_monotonic = now
+                self.processing_overload_streak = 0
+                request_fallback = True
+        if request_fallback:
+            self.preview.request_safer_preset()
+
+    def event_processing_status(self):
+        with self.processing_health_lock:
+            samples = list(self.processing_samples)
+            event_rate = 0.0
+            utilization = 0.0
+            if len(samples) >= 2 and samples[-1][0] > samples[0][0]:
+                window_seconds = (samples[-1][0] - samples[0][0]) / 1e9
+                event_rate = sum(sample[1] for sample in samples) / window_seconds
+                utilization = sum(sample[2] for sample in samples) / window_seconds
+            return {
+                "event_rate_per_second": round(event_rate, 1),
+                "decode_lag_ms": round(self.decode_lag_ms, 3),
+                "process_duration_ms": round(self.process_duration_ema_ms, 3),
+                "processing_utilization": round(utilization, 3),
+                "overloaded": bool(self.decode_lag_ms >= 100 or utilization >= 0.8),
+            }
 
     def reset_trigger_monitor_timing(self):
         """再接続によるセンサー時刻基準の変化を周波数計算へ混ぜない。"""
@@ -382,6 +482,7 @@ class EVSStreamer:
         self.events_stream = device.get_i_events_stream()
         self.mv_iterator = iterator
         self.reset_trigger_monitor_timing()
+        self.reset_event_processing_health()
         if (width, height) != (self.orig_width, self.orig_height):
             self.orig_width, self.orig_height = width, height
             self.configure_event_frame_generator()
@@ -402,27 +503,20 @@ class EVSStreamer:
 
     def on_cd_frame_cb(self, ts, cd_frame):
         """イベントフレーム生成時のコールバック"""
-        try:
-            # 左右反転
-            frame_np = cv2.flip(cd_frame, 1)
+        # SDKの一時バッファだけをコピーし、反転・縮小・JPEG化は別スレッドへ渡す。
+        self.preview.submit(cd_frame.copy())
 
-            # 表示縮小
-            if self.display_factor != 1.0:
-                frame_np = cv2.resize(
-                    frame_np,
-                    None,
-                    fx=self.display_factor,
-                    fy=self.display_factor,
-                    interpolation=cv2.INTER_AREA,
-                )
-
-            # JPEG エンコードを一度だけ実施
-            ret, jpeg_buf = cv2.imencode('.jpg', frame_np)
-            if ret:
-                self.latest_frame_jpeg = jpeg_buf.tobytes()
-
-        except Exception as e:
-            print("EVS フレーム変換エラー:", e)
+    @staticmethod
+    def encode_preview_frame(cd_frame, settings):
+        frame_np = cv2.flip(cd_frame, 1)
+        scale = settings["evs_scale"]
+        if scale != 1.0:
+            frame_np = cv2.resize(
+                frame_np, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        ret, jpeg_buf = cv2.imencode(
+            ".jpg", frame_np,
+            [cv2.IMWRITE_JPEG_QUALITY, int(settings["jpeg_quality"])])
+        return jpeg_buf.tobytes() if ret else None
 
     def event_loop(self):
         retry_delay = 1.0
@@ -437,7 +531,11 @@ class EVSStreamer:
                     if not self.running:
                         break
                     EventLoop.poll_and_dispatch()
-                    self.event_frame_gen.process_events(evs)
+                    process_started = time.monotonic()
+                    with self.event_processing_lock:
+                        self.event_frame_gen.process_events(evs)
+                    self.update_event_processing_health(
+                        evs, time.monotonic() - process_started)
                     self.record_trigger_events()
                 if not self.running or not self.live_mode:
                     break
@@ -615,6 +713,7 @@ class EVSStreamer:
                     "sensor_height": self.orig_height,
                     "display_accumulation_time_us": self.fixed_accumulation_time_us,
                     "display_fps": self.fixed_fps,
+                    "preview": self.preview.status(),
                 }, settings_file, ensure_ascii=False, indent=2)
             self.trigger_file = open(triggers_path, "w", newline="", encoding="utf-8")
             self.trigger_writer = csv.DictWriter(self.trigger_file, fieldnames=(
@@ -734,6 +833,8 @@ class EVSStreamer:
                 print("EVSストリーム停止エラー:", exc)
         if self.event_thread.is_alive():
             self.event_thread.join(timeout=5)
+        self.preview.stop()
+        self.preview.join(timeout=5)
 
 # --------------------------------------------------
 # Flask アプリの定義（Web API 部分）
@@ -759,13 +860,36 @@ def after_request(response):
 @app.route('/video_feed')
 def video_feed():
     def generate():
+        last_sequence = -1
         while True:
-            if evs_streamer_instance and evs_streamer_instance.latest_frame_jpeg:
-                frame_data = evs_streamer_instance.latest_frame_jpeg
+            sequence, frame_data = (
+                evs_streamer_instance.preview.get_jpeg_packet()
+                if evs_streamer_instance else (0, None))
+            if frame_data and sequence != last_sequence:
+                last_sequence = sequence
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
-            time.sleep(0.05)
+            time.sleep(0.01)
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/set_preview', methods=['POST'])
+def set_preview():
+    data = request.get_json(silent=True) or {}
+    preset = data.get("preset")
+    auto_degrade = data.get("auto_degrade", True)
+    if preset not in PREVIEW_PRESETS or not isinstance(auto_degrade, bool):
+        return jsonify({"status": "error", "message": "表示設定が不正です。"}), 400
+    try:
+        preview_status = evs_streamer_instance.update_preview_preferences(
+            preset, auto_degrade, persist=bool(data.get("persist", False)))
+    except (OSError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    return jsonify({
+        "status": "success",
+        "message": f"EVS表示を{PREVIEW_PRESETS[preset]['label']}へ変更しました。",
+        "preview": preview_status,
+    })
 
 @app.route('/set_save', methods=['POST'])
 def set_save():
@@ -850,7 +974,9 @@ def status():
         "status": "success",
         "streaming": bool(
             evs_streamer_instance and evs_streamer_instance.connection_state == "connected"),
-        "frame_ready": bool(evs_streamer_instance and evs_streamer_instance.latest_frame_jpeg),
+        "frame_ready": bool(evs_streamer_instance and evs_streamer_instance.preview.get_jpeg()),
+        "preview": evs_streamer_instance.preview.status(),
+        "processing": evs_streamer_instance.event_processing_status(),
         "recording": bool(evs_streamer_instance and evs_streamer_instance.recording),
         "trigger_in": bool(evs_streamer_instance and evs_streamer_instance.trigger_in),
         "trigger_monitor": evs_streamer_instance.trigger_monitor_status(),

@@ -64,6 +64,18 @@ The frame view has a corresponding external-trigger monitor. When external drive
 
 The frame camera is configured with a hardware ROI matching the EVS sensor's physical field of view (1800×1012 at the default sensor specifications, with the configured frame shift applied). This avoids transferring the unused border pixels. If the camera rejects hardware ROI control, the application restores full-sensor acquisition and automatically falls back to the same software crop. The actual mode, size, and sensor offset are stored in `camera_settings.json`, `frame_summary.json`, `/status`, and the frame audit CSV.
 
+## Recording-priority live preview
+
+JPEG preview generation is isolated from both camera callback paths. Each camera callback only replaces a single latest-preview slot; demosaicing, resize, flip, and JPEG encoding run in dedicated best-effort workers. Superseded preview frames and duplicate MJPEG sends are intentionally skipped, while Bayer/RAW recording and trigger auditing are never thinned by the preview manager.
+
+The GUI provides three shared preview presets:
+
+- **記録優先**: 10 fps, EVS 0.5×, Frame 0.45×, JPEG quality 70
+- **標準**: 20 fps, EVS 0.75×, Frame 0.6×, JPEG quality 75
+- **高画質**: 30 fps, EVS 1.0×, Frame 0.8×, JPEG quality 80
+
+With automatic degradation enabled, sustained JPEG utilization or EVS decode lag above 100 ms lowers only the effective preview preset. After 30 seconds of stable low utilization it recovers one level toward the requested preset. `/status` and the GUI report requested/effective presets, actual/target preview fps, encode time, skipped preview sources, EVS event rate, decode lag, and automatic degradation/recovery counts. The selected upper limit is persisted under `preview` in `config.yaml`.
+
 ## Trigger topology
 
 The EVS Trigger In and the frame camera's `Line0 = ExposureActive` output remain enabled at all times. The trigger panel controls only how the frame camera is driven:

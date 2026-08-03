@@ -20,6 +20,7 @@ from flask import Flask, Response, request, jsonify
 
 import global_calc as g_calc
 from config_manager import create_session_directory, load_config, save_config, save_config_snapshot
+from preview_manager import LatestFramePreview, PREVIEW_PRESETS
 
 frame_streamer_instance = None
 
@@ -38,6 +39,11 @@ def normalize_save_settings(save_location, save_filename):
 # YAML 設定ファイルからパラメータ読み込み
 #######################################
 config_data = load_config()
+preview_config = config_data.get("preview", {})
+DEFAULT_PREVIEW_PRESET = str(preview_config.get("preset", "standard"))
+if DEFAULT_PREVIEW_PRESET not in PREVIEW_PRESETS:
+    DEFAULT_PREVIEW_PRESET = "standard"
+DEFAULT_PREVIEW_AUTO_DEGRADE = bool(preview_config.get("autoDegrade", True))
 
 # bothViewHW セクションからフレームカメラとイベントカメラのハードウェア情報を取得
 frame_resolution = config_data["bothViewHW"]["frameCamHW"]["resolution"]
@@ -918,7 +924,12 @@ class FrameStreamer:
         self.save_location = save_location
         self.display_factor = display_factor
         self.save_filename = ""  # ファイル名設定
-        self.latest_frame_jpeg = None  # JPEG エンコード済みフレーム
+        self.preview = LatestFramePreview(
+            "Frame", "frame", self.encode_preview_frame,
+            preset=DEFAULT_PREVIEW_PRESET,
+            auto_degrade=DEFAULT_PREVIEW_AUTO_DEGRADE,
+        )
+        self.preview.start()
         self.recording = False
         self.recording_queue = None
         self.image_thread = None
@@ -1094,17 +1105,32 @@ class FrameStreamer:
             self.record_frame_event(cropped_bayer, metadata)
 
             if cropped_bayer is not None:
-                display_np = self.bayer_to_bgr(cropped_bayer, metadata["pixel_format"])
-                if self.display_factor != 1.0:
-                    display_np = cv2.resize(
-                        display_np, None, fx=self.display_factor, fy=self.display_factor,
-                        interpolation=cv2.INTER_AREA)
-                ret, jpeg_buf = cv2.imencode('.jpg', display_np)
-                if ret:
-                    self.latest_frame_jpeg = jpeg_buf.tobytes()
+                self.preview.submit((cropped_bayer, metadata["pixel_format"]))
 
         except Exception as exc:
             print("フレーム処理エラー:", exc)
+
+    @staticmethod
+    def encode_preview_frame(payload, settings):
+        bayer_np, pixel_format = payload
+        display_np = FrameStreamer.bayer_to_bgr(bayer_np, pixel_format)
+        scale = settings["frame_scale"]
+        if scale != 1.0:
+            display_np = cv2.resize(
+                display_np, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        ret, jpeg_buf = cv2.imencode(
+            ".jpg", display_np,
+            [cv2.IMWRITE_JPEG_QUALITY, int(settings["jpeg_quality"])])
+        return jpeg_buf.tobytes() if ret else None
+
+    def update_preview_preferences(self, preset, auto_degrade, persist=True):
+        status = self.preview.set_preferences(preset, auto_degrade)
+        if persist:
+            config = load_config()
+            config.setdefault("preview", {})["preset"] = preset
+            config["preview"]["autoDegrade"] = bool(auto_degrade)
+            save_config(config)
+        return status
 
     def record_frame_event(self, bayer_np, metadata):
         with self.recording_lock:
@@ -1226,6 +1252,7 @@ class FrameStreamer:
             camera_settings = self.cam_thread.read_camera_settings()
             camera_settings["external_trigger"] = self.cam_thread.trigger_configuration()
             camera_settings["recording_roi"] = dict(self.cam_thread.roi_configuration)
+            camera_settings["preview"] = self.preview.status()
             with open(os.path.join(frame_path, "camera_settings.json"),
                       "w", encoding="utf-8") as settings_file:
                 json.dump(camera_settings, settings_file, ensure_ascii=False, indent=2)
@@ -1378,6 +1405,8 @@ class FrameStreamer:
         # 監視停止直前に参照が更新されていた場合も、最後のスレッドを確実に止める。
         self.cam_thread.stop()
         self.cam_thread.join(timeout=10)
+        self.preview.stop()
+        self.preview.join(timeout=5)
 
 #######################################
 # Flask アプリの定義（Web API 部分）
@@ -1404,13 +1433,39 @@ def after_request(response):
 @app.route('/video_feed')
 def video_feed():
     def generate():
+        last_sequence = -1
         while True:
-            if frame_streamer_instance and frame_streamer_instance.latest_frame_jpeg:
-                frame_data = frame_streamer_instance.latest_frame_jpeg
+            sequence, frame_data = (
+                frame_streamer_instance.preview.get_jpeg_packet()
+                if frame_streamer_instance else (0, None))
+            if frame_data and sequence != last_sequence:
+                last_sequence = sequence
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
-            time.sleep(0.05)
+            time.sleep(0.01)
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/set_preview', methods=['POST'])
+def set_preview():
+    data = request.get_json(silent=True) or {}
+    preset = data.get("preset")
+    auto_degrade = data.get("auto_degrade", True)
+    if preset not in PREVIEW_PRESETS or not isinstance(auto_degrade, bool):
+        return jsonify({
+            "status": "error",
+            "message": "表示設定が不正です。",
+        }), 400
+    try:
+        preview_status = frame_streamer_instance.update_preview_preferences(
+            preset, auto_degrade, persist=bool(data.get("persist", True)))
+    except (OSError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    return jsonify({
+        "status": "success",
+        "message": f"Frame表示を{PREVIEW_PRESETS[preset]['label']}へ変更しました。",
+        "preview": preview_status,
+    })
 
 @app.route('/set_save', methods=['POST'])
 def set_save():
@@ -1529,7 +1584,9 @@ def status():
     return jsonify({
         "status": "success",
         "streaming": camera_ready,
-        "frame_ready": bool(frame_streamer_instance and frame_streamer_instance.latest_frame_jpeg),
+        "frame_ready": bool(
+            frame_streamer_instance and frame_streamer_instance.preview.get_jpeg()),
+        "preview": frame_streamer_instance.preview.status(),
         "recording": bool(frame_streamer_instance and frame_streamer_instance.recording),
         "recording_finalizing": bool(
             frame_streamer_instance and frame_streamer_instance.recording_finalizing),
