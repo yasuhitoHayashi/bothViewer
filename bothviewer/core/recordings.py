@@ -18,6 +18,7 @@ import numpy as np
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+\.pgm$")
+EVS_ROLES = ("evs", "evs_a", "evs_b")
 _RAW_STATE_LOCK = threading.Lock()
 _RAW_STATES = OrderedDict()
 _RAW_STATE_LIMIT = 4
@@ -55,6 +56,15 @@ def _summary_for(session_path):
         frame = _read_json(os.path.join(session_path, "frame", "frame_summary.json"))
     if not evs:
         evs = _read_json(os.path.join(session_path, "evs", "evs_summary.json"))
+    evs_sources = session.get("evs_sources") if isinstance(
+        session.get("evs_sources"), dict) else {}
+    for role in EVS_ROLES:
+        summary = _read_json(os.path.join(session_path, role, "evs_summary.json"))
+        if summary:
+            evs_sources[role] = summary
+    if not evs and evs_sources:
+        evs = next(iter(evs_sources.values()))
+    session["evs_sources"] = evs_sources
     return session, frame, evs, synchronization
 
 
@@ -91,7 +101,7 @@ def list_sessions(save_location):
             session_path = entry.path
             if not (os.path.isfile(os.path.join(session_path, "session.json")) or
                     os.path.isdir(os.path.join(session_path, "frame")) or
-                    os.path.isdir(os.path.join(session_path, "evs"))):
+                    any(os.path.isdir(os.path.join(session_path, role)) for role in EVS_ROLES)):
                 continue
             session, frame, evs, synchronization = _summary_for(session_path)
             stat = entry.stat(follow_symlinks=False)
@@ -107,6 +117,9 @@ def list_sessions(save_location):
                 "matched": int(synchronization.get("matched", 0) or 0),
                 "losses": losses,
                 "complete": bool(session) and os.path.isfile(os.path.join(session_path, "session.json")),
+                "evs_roles": sorted(session.get("evs_sources", {})),
+                "kind": "both" if frame else (
+                    "evs_dual" if len(session.get("evs_sources", {})) > 1 else "evs_single"),
             })
     sessions.sort(key=lambda item: item["started_utc"], reverse=True)
     return sessions
@@ -153,19 +166,23 @@ def session_detail(save_location, session_id, preview_limit=4):
         "size_bytes": image_bytes,
     }]
     for relative_path in (
-            "frame/frame_events.csv", "frame/write_results.csv",
-            "evs/triggers.csv", "synchronization.csv",
-            "frame/camera_settings.json", "evs/camera_settings.json", "session.json"):
+            "frame/frame_events.csv", "frame/write_results.csv", "synchronization.csv",
+            "frame/camera_settings.json", "session.json"):
         entry = _file_entry(session_path, relative_path)
         if entry:
             files.append(entry)
-    raw_dir = os.path.join(session_path, "evs")
-    if os.path.isdir(raw_dir):
-        for name in sorted(os.listdir(raw_dir)):
-            if re.fullmatch(r"events(?:_\d+)?\.raw", name):
-                entry = _file_entry(session_path, f"evs/{name}", 1)
-                if entry:
-                    files.append(entry)
+    for role in EVS_ROLES:
+        for name in ("triggers.csv", "camera_settings.json", "evs_summary.json"):
+            entry = _file_entry(session_path, f"{role}/{name}")
+            if entry:
+                files.append(entry)
+        raw_dir = os.path.join(session_path, role)
+        if os.path.isdir(raw_dir):
+            for name in sorted(os.listdir(raw_dir)):
+                if re.fullmatch(r"events(?:_\d+)?\.raw", name):
+                    entry = _file_entry(session_path, f"{role}/{name}", 1)
+                    if entry:
+                        files.append(entry)
     stat = os.stat(session_path)
     roi = frame.get("recording_roi") if isinstance(frame.get("recording_roi"), dict) else {}
     return {
@@ -176,6 +193,7 @@ def session_detail(save_location, session_id, preview_limit=4):
         "duration_seconds": float(frame.get("duration_seconds") or evs.get("duration_seconds") or 0),
         "frame": frame,
         "evs": evs,
+        "evs_sources": session.get("evs_sources", {}),
         "synchronization": synchronization,
         "losses": _loss_counts(frame, synchronization),
         "recording_roi": roi,
@@ -215,6 +233,59 @@ def render_preview_jpeg(save_location, session_id, filename, max_width=720):
 
 def _raw_name_for_epoch(epoch):
     return "events.raw" if epoch == 0 else f"events_{epoch:03d}.raw"
+
+
+def _validate_evs_role(role):
+    if role not in EVS_ROLES:
+        raise ValueError("EVS roleが不正です。")
+    return role
+
+
+def evs_playback_manifest(save_location, session_id, role="evs", interval_us=33_000):
+    session_path = _safe_session_path(save_location, session_id)
+    role = _validate_evs_role(role)
+    summary = _read_json(os.path.join(session_path, role, "evs_summary.json"))
+    raw_path = os.path.join(session_path, role, "events.raw")
+    if not os.path.isfile(raw_path):
+        raise FileNotFoundError(f"{role}/events.rawがありません。")
+    duration_us = max(1, round(float(summary.get("duration_seconds", 0) or 0) * 1_000_000))
+    interval_us = max(5_000, min(int(interval_us), 500_000))
+    segment_starts = {0: 0}
+    connection_path = os.path.join(session_path, role, "connection_events.csv")
+    started_ns = int(summary.get("started_utc_ns", 0) or 0)
+    if started_ns and os.path.isfile(connection_path):
+        with open(connection_path, newline="", encoding="utf-8") as source:
+            for row in csv.DictReader(source):
+                if row.get("event") != "reconnected":
+                    continue
+                try:
+                    epoch = int(row.get("stream_epoch") or 0)
+                    relative_us = max(0, round(
+                        (int(row["host_utc_ns"]) - started_ns) / 1000))
+                except (KeyError, TypeError, ValueError):
+                    continue
+                segment_starts[epoch] = relative_us
+    raw_files = list(summary.get("raw_files") or ["events.raw"])
+    segments = []
+    for index, filename in enumerate(raw_files):
+        start_us = segment_starts.get(index, 0 if index == 0 else duration_us)
+        next_start = segment_starts.get(index + 1, duration_us)
+        segments.append({
+            "epoch": index, "filename": filename, "start_us": start_us,
+            "end_us": max(start_us, next_start),
+        })
+    times = list(range(0, duration_us + 1, interval_us))
+    if times[-1] != duration_us:
+        times.append(duration_us)
+    return {
+        "session_id": session_id,
+        "role": role,
+        "started_utc_ns": int(summary.get("started_utc_ns", 0) or 0),
+        "duration_us": duration_us,
+        "interval_us": interval_us,
+        "times_us": times,
+        "segments": segments,
+    }
 
 
 def _first_raw_trigger_us(raw_path):
@@ -364,13 +435,14 @@ def _render_event_jpeg(raw_path, center_us, window_us, max_width):
 
 
 def render_event_window_jpeg(save_location, session_id, epoch, center_us,
-                             window_us=33_000, max_width=720):
+                             window_us=33_000, max_width=720, role="evs"):
     session_path = _safe_session_path(save_location, session_id)
     epoch = int(epoch)
     center_us = max(0, int(center_us))
     window_us = max(2_000, min(int(window_us), 500_000))
     max_width = max(160, min(int(max_width), 1280))
-    raw_path = os.path.join(session_path, "evs", _raw_name_for_epoch(epoch))
+    role = _validate_evs_role(role)
+    raw_path = os.path.join(session_path, role, _raw_name_for_epoch(epoch))
     if not os.path.isfile(raw_path):
         raise FileNotFoundError("対応するEVS RAWセグメントがありません。")
     return _render_event_jpeg(raw_path, center_us, window_us, max_width)
@@ -406,14 +478,16 @@ def _render_event_overlay_png(raw_path, center_us, window_us, max_width, max_eve
 
 
 def render_event_overlay_png(save_location, session_id, epoch, center_us,
-                             window_us=33_000, max_width=960, max_events=50_000):
+                             window_us=33_000, max_width=960, max_events=50_000,
+                             role="evs"):
     session_path = _safe_session_path(save_location, session_id)
     epoch = int(epoch)
     center_us = max(0, int(center_us))
     window_us = max(2_000, min(int(window_us), 500_000))
     max_width = max(160, min(int(max_width), 1280))
     max_events = max(0, min(int(max_events), 2_000_000))
-    raw_path = os.path.join(session_path, "evs", _raw_name_for_epoch(epoch))
+    role = _validate_evs_role(role)
+    raw_path = os.path.join(session_path, role, _raw_name_for_epoch(epoch))
     if not os.path.isfile(raw_path):
         raise FileNotFoundError("対応するEVS RAWセグメントがありません。")
     return _render_event_overlay_png(

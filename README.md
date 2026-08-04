@@ -5,11 +5,16 @@ bothViewer provides a web-based control console for simultaneously viewing and r
 ## Project layout
 
 - `launcher.py`: dependency check, shared recording-directory resolution, and process supervision
+- `modeSelector.html`: six-mode startup screen and EVS serial selection
+- `evsViewer.html`: single/dual EVS live capture console
+- `evsDataViewer.html`: single/dual EVS synchronized RAW playback
+- `dataServer.py`: read-only recording browser service
 - `frameStreamer.py`, `evsStreamer.py`: backward-compatible executable entry points
 - `bothviewer/cameras/frame.py`: frame-camera lifecycle, Bayer recording, and controls
 - `bothviewer/cameras/evs.py`: EVS lifecycle, RAW recording, and Trigger In monitoring
 - `bothviewer/api/evs.py`: hardware-independent port 5001 HTTP API factory
 - `bothviewer/api/frame.py`: hardware-independent port 5002 HTTP API factory
+- `bothviewer/api/data.py`: read-only session catalog and EVS/combined playback API
 - `bothviewer/api/common.py`: API response helpers shared by both servers
 - `bothviewer/core/geometry.py`: physical field-of-view and camera-ROI calculations
 - `bothviewer/core/preview.py`: recording-priority latest-frame JPEG workers
@@ -55,13 +60,26 @@ Use the wheel version present on your machine; it must match the installed Vimba
 
 ## Usage
 
-Launch both servers and open the viewer with:
+Open the mode selector with:
 
 ```bash
 python launcher.py
 ```
 
-The event stream server starts on port `5001` and the frame stream server starts on port `5002`. After a short delay, `bothViewer.html` opens automatically in your default browser. Use the status indicators in the upper-right corner to confirm that each camera is streaming before recording.
+`launcher.py` first opens a mode-selection screen. It starts only the services
+required by the selected mode:
+
+- **Frame + EVS capture**: synchronized capture using EVS on port 5001 and Frame on 5002
+- **Single EVS capture**: one EVS service on port 5001
+- **Dual EVS capture**: EVS A on port 5001 and EVS B on port 5003
+- **Frame + EVS review**: synchronized frame/event overlay through the read-only data server
+- **Single EVS review**: event-only real-time RAW playback
+- **Dual EVS review**: two RAW streams aligned by recording-start host UTC
+
+The launcher control API uses port 5000. In dual capture mode two distinct EVS
+serial numbers must be selected. Returning to the mode-selection page and
+choosing another mode stops the previous services cleanly before starting the
+new set.
 
 Press `Ctrl+C` in the terminal to stop both servers cleanly.
 
@@ -81,6 +99,12 @@ Each recording creates one timestamped session directory shared by both cameras:
 - `frame/connection_events.csv`, `evs/connection_events.csv`: disconnect and reconnect audit trail
 - `synchronization.csv`: frame-to-exposure-start correspondence and unmatched records (the reference edge follows `LineInverter`)
 - `session.json`: session-wide quality summary
+
+Single-EVS recordings use `evs/`. Dual-EVS recordings use separate `evs_a/`
+and `evs_b/` directories so RAW, trigger, connection, and settings files never
+collide. Their summaries retain camera selector, role, and host UTC start time;
+dual playback uses that host time to place both streams on one experiment
+timeline.
 
 The recording panel shows incomplete frames, ID gaps, queue drops, and write failures while an experiment is running. Any non-zero loss counter should be treated as a quality warning.
 

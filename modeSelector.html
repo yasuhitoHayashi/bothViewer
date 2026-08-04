@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>bothViewer · モード選択</title>
+<link rel="stylesheet" href="static/modeSelector.css"></head>
+<body><main class="shell">
+  <header><span class="mark">B</span><div><h1>bothViewer</h1><p>使用する構成を選択してください</p></div></header>
+  <section class="camera-select"><h2>EVSカメラ</h2><div class="selectors">
+    <label>EVS 1<select id="evs1"><option value="">最初の利用可能カメラ</option></select></label>
+    <label>EVS 2<select id="evs2"><option value="">選択してください</option></select></label>
+    <button id="refreshCameras" type="button">再検出</button>
+  </div><p id="cameraMessage">カメラを検出しています…</p></section>
+  <section><h2>撮影</h2><div class="mode-grid">
+    <button class="mode-card" data-mode="capture_both"><b>Frame + EVS</b><span>同期撮影・トリガー監視</span></button>
+    <button class="mode-card" data-mode="capture_evs_single"><b>EVS 1台</b><span>単独RAW撮影</span></button>
+    <button class="mode-card" data-mode="capture_evs_dual"><b>EVS 2台</b><span>2台同時RAW撮影</span></button>
+  </div></section>
+  <section><h2>保存データを確認</h2><div class="mode-grid">
+    <button class="mode-card review" data-mode="review_both"><b>Frame + EVS</b><span>同期オーバーレイ再生</span></button>
+    <button class="mode-card review" data-mode="review_evs_single"><b>EVS 1台</b><span>単独イベント再生</span></button>
+    <button class="mode-card review" data-mode="review_evs_dual"><b>EVS 2台</b><span>同時刻で並列再生</span></button>
+  </div></section>
+  <p id="launchMessage" class="message"></p>
+</main><script src="static/modeSelector.js"></script></body></html>

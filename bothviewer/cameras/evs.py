@@ -42,8 +42,11 @@ DEFAULT_PREVIEW_AUTO_DEGRADE = bool(preview_config.get("autoDegrade", True))
 # EVSStreamer クラス（Tkinter 不使用版）
 # --------------------------------------------------
 class EVSStreamer:
-    def __init__(self, event_file_path, save_location, display_factor=0.5):
+    def __init__(self, event_file_path, save_location, display_factor=0.5, role="evs"):
+        if role not in {"evs", "evs_a", "evs_b"}:
+            raise ValueError("EVS roleは evs / evs_a / evs_b のいずれかです。")
         self.event_file_path = event_file_path
+        self.role = role
         self.save_location = save_location
         self.save_filename = ""  # Web から更新可能な保存ファイル名
         self.live_mode = event_file_path == "" or is_live_camera(event_file_path)
@@ -300,7 +303,7 @@ class EVSStreamer:
         self.recording_raw_files.append(filename)
 
     def connect_live_device(self):
-        device = initiate_device("")
+        device = initiate_device(self.event_file_path)
         iterator = EventsIterator.from_device(device=device)
         height, width = iterator.get_size()
         self.device = device
@@ -536,17 +539,17 @@ class EVSStreamer:
             if not session_id:
                 session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
             session_root = create_session_directory(self.save_location, session_id)
-            evs_path = os.path.join(session_root, "evs")
+            evs_path = os.path.join(session_root, self.role)
             os.makedirs(evs_path, exist_ok=True)
             raw_path = os.path.join(evs_path, "events.raw")
             triggers_path = os.path.join(evs_path, "triggers.csv")
             connection_path = os.path.join(evs_path, "connection_events.csv")
             if os.path.exists(raw_path) or os.path.exists(triggers_path):
-                raise ValueError("同じsession_idのEVS記録が既に存在します。")
+                raise ValueError(f"同じsession_idの{self.role}記録が既に存在します。")
 
             if not self.trigger_in and not self.update_trigger(True):
                 raise RuntimeError("EVS Trigger Inを有効化できませんでした。")
-            save_config_snapshot(load_config(), session_root, prefix="evs_config")
+            save_config_snapshot(load_config(), session_root, prefix=f"{self.role}_config")
             with open(os.path.join(evs_path, "camera_settings.json"),
                       "w", encoding="utf-8") as settings_file:
                 json.dump({
@@ -558,6 +561,8 @@ class EVSStreamer:
                     "display_accumulation_time_us": self.fixed_accumulation_time_us,
                     "display_fps": self.fixed_fps,
                     "preview": self.preview.status(),
+                    "role": self.role,
+                    "camera_selector": self.event_file_path,
                 }, settings_file, ensure_ascii=False, indent=2)
             self.trigger_file = open(triggers_path, "w", newline="", encoding="utf-8")
             self.trigger_writer = csv.DictWriter(self.trigger_file, fieldnames=(
@@ -629,6 +634,8 @@ class EVSStreamer:
                 "raw_files": list(self.recording_raw_files),
                 "camera_reconnections": (
                     self.successful_reconnections - self.recording_reconnect_baseline),
+                "role": self.role,
+                "camera_selector": self.event_file_path,
             }
             with open(os.path.join(recording_folder, "evs_summary.json"),
                       "w", encoding="utf-8") as summary_file:
@@ -641,18 +648,28 @@ class EVSStreamer:
                 deadline = time.monotonic() + 30
                 while not os.path.exists(frame_summary_path) and time.monotonic() < deadline:
                     time.sleep(0.1)
-            synchronization = build_synchronization_report(session_root, session_id)
+            synchronization = (
+                build_synchronization_report(session_root, session_id)
+                if self.role == "evs" else
+                {"generated": False, "reason": "dual EVS session"})
             frame_summary = None
             if os.path.exists(frame_summary_path):
                 with open(frame_summary_path, encoding="utf-8") as frame_summary_file:
                     frame_summary = json.load(frame_summary_file)
+            evs_sources = {}
+            for role in ("evs", "evs_a", "evs_b"):
+                summary_path = os.path.join(session_root, role, "evs_summary.json")
+                if os.path.isfile(summary_path):
+                    with open(summary_path, encoding="utf-8") as source:
+                        evs_sources[role] = json.load(source)
             with open(os.path.join(session_root, "session.json"),
                       "w", encoding="utf-8") as session_file:
                 json.dump({
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "session_id": session_id,
                     "frame": frame_summary,
-                    "evs": summary,
+                    "evs": evs_sources.get("evs"),
+                    "evs_sources": evs_sources,
                     "synchronization": synchronization,
                 }, session_file, ensure_ascii=False, indent=2)
             print("EVS記録終了:", recording_folder, summary, synchronization)
@@ -699,6 +716,10 @@ if __name__ == "__main__":
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--input-event-file', dest='event_file_path', default="",
                         help="入力イベントファイルのパス。未指定の場合はライブカメラを使用します。")
+    parser.add_argument('--camera-selector', dest='camera_selector', default="",
+                        help="ライブEVSカメラのシリアル番号。空の場合は最初の利用可能カメラ。")
+    parser.add_argument('--role', choices=('evs', 'evs_a', 'evs_b'), default='evs',
+                        help="セッション内で使用するEVS保存ディレクトリ名")
     parser.add_argument('--save_location', dest='save_location', default=os.getcwd(),
                         help="録画ファイルの保存先ディレクトリ")
     parser.add_argument('--port', dest='port', type=int, default=5001,
@@ -711,10 +732,13 @@ if __name__ == "__main__":
         parser.error("--display-factor は 0 より大きく 1 以下にしてください")
 
     # グローバル変数に EVSStreamer インスタンスをセット
+    if args.event_file_path and args.camera_selector:
+        parser.error("--input-event-file と --camera-selector は同時指定できません")
     evs_streamer_instance = EVSStreamer(
-        args.event_file_path,
+        args.event_file_path or args.camera_selector,
         args.save_location,
         display_factor=args.display_factor,
+        role=args.role,
     )
     evs_streamer_instance.start_event_loop()
 

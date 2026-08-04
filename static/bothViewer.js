@@ -840,6 +840,8 @@ document.querySelector('.dialog-close').addEventListener('click', () => dialog.c
 dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
 dialog.addEventListener('close', () => { $('dialogVideo').removeAttribute('src'); });
 
+const initialMode = new URLSearchParams(window.location.search).get('mode');
+if (initialMode === 'review') setActivePage('data');
 syncCaptureActivity();
 initializeSaveLocation();
 updateRecordingUi(false);
