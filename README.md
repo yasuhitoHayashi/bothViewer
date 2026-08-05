@@ -18,7 +18,7 @@ bothViewer provides a web-based control console for simultaneously viewing and r
 - `bothviewer/api/common.py`: API response helpers shared by both servers
 - `bothviewer/core/geometry.py`: physical field-of-view and camera-ROI calculations
 - `bothviewer/core/preview.py`: recording-priority latest-frame JPEG workers
-- `bothviewer/core/synchronization.py`: frame/trigger audit and `synchronization.csv` generation
+- `bothviewer/core/synchronization.py`: frame/trigger audit and rebuildable synchronization index
 - `bothviewer/core/recordings.py`: saved-session catalog, Bayer preview, and synchronized playback rendering
 - `bothviewer/core/config.py`: configuration, save-path validation, and session-directory helpers
 - `bothViewer.html`: UI markup only
@@ -76,7 +76,7 @@ required by the selected mode:
 - **Single EVS review**: event-only real-time RAW playback
 - **Dual EVS review**: two RAW streams aligned by recording-start host UTC
 
-The launcher control API uses port 5000. In dual capture mode two distinct EVS
+The launcher screen and control API use port 5050. In dual capture mode two distinct EVS
 serial numbers must be selected. Returning to the mode-selection page and
 choosing another mode stops the previous services cleanly before starting the
 new set.
@@ -97,8 +97,17 @@ Each recording creates one timestamped session directory shared by both cameras:
 - `evs/triggers.csv`: external-trigger edges with EVS and host timestamps
 - `evs/camera_settings.json`: EVS bias, trigger, and sensor settings at recording start
 - `frame/connection_events.csv`, `evs/connection_events.csv`: disconnect and reconnect audit trail
-- `synchronization.csv`: frame-to-exposure-start correspondence and unmatched records (the reference edge follows `LineInverter`)
+- `synchronization.jsonl`: rebuildable frame-to-exposure-start index and unmatched records (the reference edge follows `LineInverter`)
+- `synchronization_summary.json`: synchronization quality summary used by the recording browser
+- `synchronization.csv`: optional compatibility export of the same derived index
 - `session.json`: session-wide quality summary
+
+`frame/frame_events.csv`, `frame/saved_frames.csv`, and `evs/triggers.csv` are the
+primary audit records. Synchronization files are derived indexes: if recording
+shutdown is interrupted or disk/bandwidth pressure prevents them from being
+written, the browser and synchronized player reconstruct the index on demand.
+Index and summary updates use an atomic replacement so a partially written file
+is never treated as complete.
 
 Single-EVS recordings use `evs/`. Dual-EVS recordings use separate `evs_a/`
 and `evs_b/` directories so RAW, trigger, connection, and settings files never
@@ -120,7 +129,29 @@ The frame camera is configured with a hardware ROI matching the EVS sensor's phy
 
 The **保存データ** tab reads completed and interrupted sessions from the configured recording directory. It shows recording duration, saved-frame and reference-edge counts, synchronization matches, ROI, loss counters, file sizes, and on-demand Bayer previews without modifying the source data.
 
-Synchronized playback uses each `matched` row in `synchronization.csv`. Frame images retain their measured host-time spacing, while the paired EVS sensor timestamp selects a short window from the corresponding RAW stream epoch. EVS background pixels are transparent and the events are overlaid directly on the Bayer frame, with positive events in white and negative events in black. Controls provide overlay opacity, pause/resume, seeking, 0.25×–4× playback speed, and 10/33/100 ms EVS accumulation windows. At 1×, display updates may skip intermediate frames if decoding cannot keep up; the player preserves experimental time instead of accumulating playback delay.
+Synchronized playback uses each `matched` record in the derived synchronization index. If that index is absent or stale, it is rebuilt from the primary audit records before playback; the legacy CSV is not required. Frame images retain their measured host-time spacing, while the paired EVS sensor timestamp selects a short window from the corresponding RAW stream epoch. EVS background pixels are transparent and the events are overlaid directly on the Bayer frame, with positive events in white and negative events in black. Controls provide overlay opacity, pause/resume, seeking, 0.25×–4× playback speed, and 10/33/100 ms EVS accumulation windows. At 1×, display updates may skip intermediate frames if decoding cannot keep up; the player preserves experimental time instead of accumulating playback delay.
+
+Playback does not stop when frame-to-trigger correspondence is incomplete. It
+uses paired triggers where their host-time offset remains consistent, falls back
+to EVS sensor/host-time interpolation after a trigger-source change or missing
+edge, and finally estimates position from the RAW segment start when no trigger
+anchor is available. Each displayed frame reports which synchronization mode was
+used, so approximate regions remain distinguishable from precisely paired ones.
+
+In **EVS 1台データ確認**, `RAWファイルを開く` can play a standalone
+Metavision `.raw` file without a bothViewer session directory or summary files.
+The local native picker is used on macOS and Windows, so large RAW files are read
+directly by the data service rather than uploaded through the browser. The first
+open scans the file to determine its duration, event count, and sensor geometry;
+subsequent time-window rendering uses the same playback controls and palettes as
+session recordings.
+
+Playback offers monochrome and negative-cyan/positive-magenta event palettes.
+The main synchronized player is capped at 30 display fps even when the recorded
+frame rate is higher; experimental time remains authoritative and intermediate
+display frames are skipped. The full synchronized frame/event sequence remains
+available below in 60-frame pages. Only the visible page and nearby thumbnails
+are rendered, avoiding an unbounded RAW-decoding burst for long recordings.
 
 EVS playback rendering has four load presets. **軽量** updates the overlay at up to 5 fps with 20,000 events per window, **標準** uses 10 fps and 50,000 events, **高密度** uses 15 fps and 100,000 events, and **全描画** updates on every saved frame without event thinning. Thinning is uniform and display-only: the RAW file and synchronization timeline are never modified, and frame playback continues at its measured real-time cadence.
 

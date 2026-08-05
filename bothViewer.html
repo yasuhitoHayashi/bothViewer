@@ -21,10 +21,13 @@ Licensed under the Apache License, Version 2.0.
       <button id="captureTabButton" class="nav-tab active" type="button" aria-current="page">撮影</button>
       <button id="dataTabButton" class="nav-tab" type="button">保存データ</button>
     </nav>
-    <div class="system-status" aria-label="接続状態">
-      <span class="status-item"><span id="evsStatusDot" class="status-dot"></span><span class="status-label">EVS</span></span>
-      <span class="status-item"><span id="frameStatusDot" class="status-dot"></span><span class="status-label">FRAME</span></span>
-      <span id="recordStatus" class="status-item" hidden><span class="status-dot recording"></span>REC</span>
+    <div class="topbar-actions">
+      <a id="mainMenuLink" class="main-menu-link" href="http://127.0.0.1:5050/">全体メニュー</a>
+      <div class="system-status" aria-label="接続状態">
+        <span class="status-item"><span id="evsStatusDot" class="status-dot"></span><span class="status-label">EVS</span></span>
+        <span class="status-item"><span id="frameStatusDot" class="status-dot"></span><span class="status-label">FRAME</span></span>
+        <span id="recordStatus" class="status-item" hidden><span class="status-dot recording"></span>REC</span>
+      </div>
     </div>
   </header>
 
@@ -242,7 +245,7 @@ Licensed under the Apache License, Version 2.0.
             </div>
             <div id="playbackContent" hidden>
               <div class="playback-view">
-                <span class="playback-label">FRAME + EVS · 負 黒 / 正 白</span>
+                <span id="playbackPaletteLabel" class="playback-label">FRAME + EVS · 負 黒 / 正 白</span>
                 <img id="playbackFrameImage" alt="同期再生中のフレーム画像">
                 <img id="playbackEvsImage" class="event-overlay" alt="透明EVSイベントオーバーレイ">
               </div>
@@ -253,14 +256,36 @@ Licensed under the Apache License, Version 2.0.
                 <select id="playbackSpeed" aria-label="再生速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1× 実時間</option><option value="2">2×</option><option value="4">4×</option></select>
                 <select id="playbackWindow" aria-label="EVS積算時間"><option value="10000">EVS 10 ms</option><option value="33000" selected>EVS 33 ms</option><option value="100000">EVS 100 ms</option></select>
                 <select id="playbackEvsLoad" aria-label="EVS描画負荷"><option value="light">EVS 軽量</option><option value="standard" selected>EVS 標準</option><option value="dense">EVS 高密度</option><option value="all">EVS 全描画</option></select>
+                <select id="playbackPalette" aria-label="EVS配色"><option value="mono" selected>負 黒 / 正 白</option><option value="magenta_cyan">負 シアン / 正 マゼンタ</option></select>
                 <label class="overlay-opacity">EVS濃さ<input id="playbackOpacity" type="range" min="0.1" max="1" value="0.82" step="0.05"></label>
               </div>
               <div id="playbackFrameMeta" class="playback-frame-meta">—</div>
             </div>
           </div>
         </section>
+        <section class="data-section trigger-diagnostics">
+          <div class="data-section-heading"><h2>トリガー診断</h2><span id="triggerDiagnosticRange">基準周期を解析中…</span></div>
+          <div id="triggerDiagnosticPanel" class="trigger-diagnostic-panel">
+            <div class="trigger-diagnostic-metrics">
+              <div><strong id="triggerExpectedMetric">—</strong><span>代表周期 / 周波数</span></div>
+              <div><strong id="triggerJitterMetric">—</strong><span>95%揺らぎ</span></div>
+              <div><strong id="triggerAnomalyMetric">—</strong><span>異常間隔</span></div>
+              <div><strong id="triggerMissingMetric">—</strong><span>欠落推定edge</span></div>
+            </div>
+            <div class="trigger-chart-wrap">
+              <canvas id="triggerTimingChart" height="220" aria-label="トリガー間隔の時系列グラフ"></canvas>
+              <i id="triggerPlaybackCursor" class="trigger-playback-cursor" hidden></i>
+            </div>
+            <div class="trigger-chart-footer">
+              <span class="trigger-legend"><i class="normal"></i>正常 <i class="early"></i>早すぎ <i class="late"></i>遅延 <i class="missing"></i>欠落疑い</span>
+              <span id="triggerCursorText">点を選ぶと同期再生位置へ移動します</span>
+            </div>
+            <div id="triggerAnomalyList" class="trigger-anomaly-list"></div>
+          </div>
+          <div id="triggerDiagnosticEmpty" class="trigger-diagnostic-empty" hidden>トリガー情報を解析できません。</div>
+        </section>
         <section class="data-section">
-          <div class="data-section-heading"><h2>フレームのプレビュー</h2><span id="dataPreviewMeta">—</span></div>
+          <div class="data-section-heading"><h2>全同期フレーム</h2><div class="preview-pagination"><button id="previewPreviousButton" class="btn" type="button" disabled>前へ</button><span id="dataPreviewMeta">—</span><button id="previewNextButton" class="btn" type="button" disabled>次へ</button></div></div>
           <div id="savedPreviewGrid" class="saved-preview-grid"></div>
         </section>
         <section class="data-section">

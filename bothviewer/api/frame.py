@@ -18,6 +18,7 @@ from bothviewer.core.recordings import (
     render_event_window_jpeg,
     render_preview_jpeg,
     session_detail,
+    trigger_timing_analysis,
 )
 from .common import add_cors_headers
 
@@ -113,12 +114,26 @@ def create_frame_app(
             return jsonify({"status": "error", "message": f"再生情報を読めません: {exc}"}), 500
         return jsonify({"status": "success", "playback": manifest})
 
+    @app.route("/recordings/<session_id>/trigger-analysis")
+    def recording_trigger_analysis(session_id):
+        try:
+            analysis = trigger_timing_analysis(
+                get_streamer().save_location, session_id, request.args.get("role", "evs"))
+        except (TypeError, ValueError) as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+        except FileNotFoundError as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 404
+        except OSError as exc:
+            return jsonify({"status": "error", "message": f"トリガー情報を読めません: {exc}"}), 500
+        return jsonify({"status": "success", "analysis": analysis})
+
     @app.route("/recordings/<session_id>/events/<int:epoch>/<int:center_us>.jpg")
     def recording_event_window(session_id, epoch, center_us):
         try:
             jpeg = render_event_window_jpeg(
                 get_streamer().save_location, session_id, epoch, center_us,
-                request.args.get("window_us", 33_000), request.args.get("width", 720))
+                request.args.get("window_us", 33_000), request.args.get("width", 720),
+                palette=request.args.get("palette", "mono"))
         except (TypeError, ValueError) as exc:
             return jsonify({"status": "error", "message": str(exc)}), 400
         except FileNotFoundError as exc:
@@ -135,7 +150,8 @@ def create_frame_app(
             png = render_event_overlay_png(
                 get_streamer().save_location, session_id, epoch, center_us,
                 request.args.get("window_us", 33_000), request.args.get("width", 960),
-                request.args.get("max_events", 50_000))
+                request.args.get("max_events", 50_000),
+                palette=request.args.get("palette", "mono"))
         except (TypeError, ValueError) as exc:
             return jsonify({"status": "error", "message": str(exc)}), 400
         except FileNotFoundError as exc:

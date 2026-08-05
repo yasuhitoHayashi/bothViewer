@@ -28,6 +28,7 @@ class ApiFactoryTests(unittest.TestCase):
             "/video_feed", "/recordings", "/recordings/<session_id>",
             "/recordings/<session_id>/preview/<filename>",
             "/recordings/<session_id>/playback",
+            "/recordings/<session_id>/trigger-analysis",
             "/recordings/<session_id>/events/<int:epoch>/<int:center_us>.jpg",
             "/recordings/<session_id>/events/<int:epoch>/<int:center_us>.png",
             "/set_preview", "/set_save", "/start_recording", "/stop_recording",

@@ -22,7 +22,7 @@ eventCam:
     diff_on: 20
   triggerIn: true
 frameCam:
-  bandwidthPreset: high
+  bandwidthPreset: standard
   exposure: Once
   externalTrigger:
     activation: RisingEdge
@@ -30,7 +30,7 @@ frameCam:
     outputInverter: true
     outputLine: Line0
     source: Line1
-  frameRate: 10.0
+  frameRate: 30.000001907348633
   gain:
     mode: Manual
     value: 0
@@ -38,5 +38,5 @@ preview:
   autoDegrade: true
   preset: record_priority
 recording:
-  file_prefix: record
-  save_location: ./records
+  file_prefix: ''
+  save_location: /Users/yasu/yhLab/bothViewer/records

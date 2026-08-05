@@ -2,19 +2,20 @@
 
 import importlib.util
 import os
-from pathlib import Path
 import subprocess
 import sys
 import threading
 import time
 import webbrowser
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
+from werkzeug.serving import make_server
 
 from bothviewer.core.config import load_config, resolve_recording_directory
 
 
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+LAUNCHER_PORT = 5050
 MODE_VIEWERS = {
     "capture_both": ("bothViewer.html", "mode=capture"),
     "capture_evs_single": ("evsViewer.html", "count=1"),
@@ -118,7 +119,7 @@ class ProcessSupervisor:
                 for name, command in commands.items()
             }
         filename, query = MODE_VIEWERS[mode]
-        return f"{Path(os.path.join(BASE_DIRECTORY, filename)).as_uri()}?{query}"
+        return f"http://127.0.0.1:{LAUNCHER_PORT}/{filename}?{query}"
 
     def _monitor_loop(self):
         while self.running:
@@ -137,13 +138,29 @@ class ProcessSupervisor:
 
 
 def create_launcher_app(supervisor):
-    app = Flask("bothviewer.launcher")
+    app = Flask(
+        "bothviewer.launcher",
+        static_folder=os.path.join(BASE_DIRECTORY, "static"),
+        static_url_path="/static",
+    )
+
+    @app.route("/")
+    def index():
+        return send_file(os.path.join(BASE_DIRECTORY, "modeSelector.html"))
+
+    @app.route("/<viewer_name>")
+    def viewer(viewer_name):
+        allowed = {filename for filename, _query in MODE_VIEWERS.values()}
+        if viewer_name not in allowed:
+            return jsonify({"status": "error", "message": "画面が見つかりません。"}), 404
+        return send_file(os.path.join(BASE_DIRECTORY, viewer_name))
 
     @app.after_request
     def cors(response):
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+        response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.route("/api/cameras")
@@ -187,13 +204,16 @@ def main():
     os.makedirs(save_location, exist_ok=True)
     supervisor = ProcessSupervisor(save_location)
     app = create_launcher_app(supervisor)
-    server = threading.Thread(
-        target=app.run,
-        kwargs={"host": "127.0.0.1", "port": 5000, "debug": False, "use_reloader": False},
-        daemon=True)
+    try:
+        # SDKのカメラ列挙が長引いても、モード起動APIを待たせない。
+        http_server = make_server("127.0.0.1", LAUNCHER_PORT, app, threaded=True)
+    except OSError as exc:
+        supervisor.shutdown()
+        print(f"起動モードサーバーを開始できません: {exc}", file=sys.stderr)
+        return 1
+    server = threading.Thread(target=http_server.serve_forever, daemon=True)
     server.start()
-    time.sleep(0.5)
-    webbrowser.open(Path(os.path.join(BASE_DIRECTORY, "modeSelector.html")).as_uri())
+    webbrowser.open(f"http://127.0.0.1:{LAUNCHER_PORT}/")
     print("モード選択画面を起動しました。CTRL+Cで終了します。")
     try:
         while True:
@@ -201,6 +221,7 @@ def main():
     except KeyboardInterrupt:
         print("終了処理中...")
     finally:
+        http_server.shutdown()
         supervisor.shutdown()
     return 0
 

@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from bothviewer.api.data import create_data_app
 from bothviewer.core.recordings import evs_playback_manifest, list_sessions
@@ -61,6 +62,36 @@ class LaunchModeTests(unittest.TestCase):
             response = client.get("/recordings/dual-session/evs/evs_a/playback")
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json()["playback"]["role"], "evs_a")
+
+    def test_standalone_raw_can_be_opened_without_a_session(self):
+        with tempfile.TemporaryDirectory() as root:
+            raw_path = os.path.join(root, "standalone.raw")
+            with open(raw_path, "wb") as raw_file:
+                raw_file.write(b"raw")
+            app = create_data_app(root)
+            client = app.test_client()
+            manifest = {
+                "filename": "standalone.raw", "duration_us": 2_000_000,
+                "event_count": 1234, "sensor_width": 1280, "sensor_height": 720,
+                "interval_us": 33_000,
+                "segments": [{"epoch": 0, "start_us": 0, "end_us": 2_000_000}],
+                "source_type": "standalone_raw",
+            }
+            with mock.patch("bothviewer.api.data.inspect_raw_file", return_value=manifest):
+                response = client.post("/raw-files/open", json={"path": raw_path})
+            self.assertEqual(response.status_code, 200)
+            playback = response.get_json()["playback"]
+            self.assertEqual(playback["filename"], "standalone.raw")
+            self.assertRegex(playback["source_id"], r"^[0-9a-f]{32}$")
+
+            with mock.patch(
+                    "bothviewer.api.data.render_raw_event_window_jpeg",
+                    return_value=b"jpeg") as renderer:
+                frame = client.get(
+                    f"/raw-files/{playback['source_id']}/100000.jpg?palette=magenta_cyan")
+            self.assertEqual(frame.status_code, 200)
+            self.assertEqual(frame.data, b"jpeg")
+            renderer.assert_called_once()
 
 
 if __name__ == "__main__":

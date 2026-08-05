@@ -22,6 +22,14 @@ let playbackWallStart = 0;
 let playbackTimelineStart = 0;
 let lastPlaybackEvsMs = -Infinity;
 let lastPlaybackEvsEpoch = null;
+let lastPlaybackRenderAt = -Infinity;
+let synchronizedPreviewManifest = null;
+let synchronizedPreviewObserver = null;
+let synchronizedPreviewPage = 0;
+let triggerAnalysis = null;
+let triggerPlotPoints = [];
+let triggerPlotRange = null;
+const SYNCHRONIZED_PREVIEW_PAGE_SIZE = 60;
 
 const $ = (id) => document.getElementById(id);
 
@@ -207,6 +215,12 @@ function pausePlayback() {
 function resetPlayback() {
   pausePlayback();
   playbackManifest = null;
+  synchronizedPreviewManifest = null;
+  synchronizedPreviewPage = 0;
+  if (synchronizedPreviewObserver) synchronizedPreviewObserver.disconnect();
+  synchronizedPreviewObserver = null;
+  $('previewPreviousButton').disabled = true;
+  $('previewNextButton').disabled = true;
   playbackIndex = 0;
   lastPlaybackEvsMs = -Infinity;
   lastPlaybackEvsEpoch = null;
@@ -216,6 +230,182 @@ function resetPlayback() {
   $('preparePlaybackButton').hidden = false;
   $('playbackEvsImage').removeAttribute('src');
   $('playbackFrameImage').removeAttribute('src');
+  triggerAnalysis = null;
+  triggerPlotPoints = [];
+  triggerPlotRange = null;
+  $('triggerPlaybackCursor').hidden = true;
+}
+
+function triggerTimeMs(item) {
+  if (Number.isFinite(Number(item.host_relative_ms))) return Number(item.host_relative_ms);
+  return Number(item.sequence || 0) * Number(triggerAnalysis?.expected_period_ms || 0);
+}
+
+function updateTriggerPlaybackCursor(relativeMs) {
+  const cursor = $('triggerPlaybackCursor');
+  if (!triggerPlotRange || !Number.isFinite(relativeMs)) { cursor.hidden = true; return; }
+  const ratio = Math.max(0, Math.min(1,
+    (relativeMs - triggerPlotRange.xMin) / Math.max(1e-9, triggerPlotRange.xMax - triggerPlotRange.xMin)));
+  cursor.style.left = `${triggerPlotRange.canvasLeft + triggerPlotRange.plotLeft + ratio * triggerPlotRange.plotWidth}px`;
+  cursor.hidden = false;
+}
+
+function renderTriggerChart() {
+  if (!triggerAnalysis?.available) return;
+  const canvas = $('triggerTimingChart');
+  const bounds = canvas.getBoundingClientRect();
+  const width = Math.max(320, Math.round(bounds.width));
+  const height = Math.max(180, Math.round(bounds.height));
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+  const context = canvas.getContext('2d');
+  context.scale(dpr, dpr);
+  context.clearRect(0, 0, width, height);
+  const margin = {left: 48, right: 14, top: 10, bottom: 25};
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const intervals = triggerAnalysis.intervals || [];
+  const times = intervals.map(triggerTimeMs);
+  const xMin = Math.min(0, ...times);
+  const xMax = Math.max(xMin + 1, ...times);
+  const expected = Number(triggerAnalysis.expected_period_ms) || 1;
+  const yMax = Math.max(expected * 1.8, Number(triggerAnalysis.upper_period_ms) * 1.2, 0.1);
+  const x = value => margin.left + (value - xMin) / (xMax - xMin) * plotWidth;
+  const y = value => margin.top + (1 - Math.min(yMax, Math.max(0, value)) / yMax) * plotHeight;
+
+  context.fillStyle = '#15181a';
+  context.fillRect(margin.left, margin.top, plotWidth, plotHeight);
+  context.fillStyle = 'rgba(72,213,151,.08)';
+  context.fillRect(margin.left, y(Number(triggerAnalysis.upper_period_ms)), plotWidth,
+    y(Number(triggerAnalysis.lower_period_ms)) - y(Number(triggerAnalysis.upper_period_ms)));
+  context.strokeStyle = '#303638'; context.lineWidth = 1;
+  context.fillStyle = '#7f898a'; context.font = '10px ui-monospace, monospace';
+  for (let step = 0; step <= 4; step += 1) {
+    const value = yMax * step / 4;
+    const py = y(value);
+    context.beginPath(); context.moveTo(margin.left, py); context.lineTo(width - margin.right, py); context.stroke();
+    context.fillText(`${value.toFixed(value < 10 ? 2 : 1)}`, 4, py + 3);
+  }
+  context.strokeStyle = '#d5dbda'; context.setLineDash([5, 4]);
+  context.beginPath(); context.moveTo(margin.left, y(expected)); context.lineTo(width - margin.right, y(expected)); context.stroke();
+  context.setLineDash([]);
+
+  const colors = {normal: '#75808b', early: '#55c2d0', late: '#f4be5b', missing_suspected: '#ff6474'};
+  triggerPlotPoints = [];
+  intervals.forEach(item => {
+    const px = x(triggerTimeMs(item));
+    const py = y(Number(item.interval_ms));
+    context.fillStyle = colors[item.status] || colors.normal;
+    context.beginPath();
+    context.arc(px, py, item.status === 'normal' ? 1.4 : 3.2, 0, Math.PI * 2);
+    context.fill();
+    triggerPlotPoints.push({x: px, y: py, item});
+  });
+  context.fillStyle = '#7f898a';
+  context.fillText('Δt ms', 4, 10);
+  context.fillText(`${(xMin / 1000).toFixed(1)} s`, margin.left, height - 5);
+  const endLabel = `${(xMax / 1000).toFixed(1)} s`;
+  context.fillText(endLabel, width - margin.right - context.measureText(endLabel).width, height - 5);
+  triggerPlotRange = {
+    xMin, xMax, plotLeft: margin.left, plotWidth,
+    canvasLeft: canvas.offsetLeft,
+  };
+  if (playbackManifest?.frames?.[playbackIndex]) {
+    updateTriggerPlaybackCursor(playbackManifest.frames[playbackIndex].relative_ms);
+  }
+}
+
+function nearestTriggerPoint(event) {
+  if (!triggerPlotPoints.length) return null;
+  const rect = $('triggerTimingChart').getBoundingClientRect();
+  const px = event.clientX - rect.left;
+  return triggerPlotPoints.reduce((best, point) =>
+    Math.abs(point.x - px) < Math.abs(best.x - px) ? point : best, triggerPlotPoints[0]);
+}
+
+async function seekToTrigger(item) {
+  if (!item) return;
+  if (!playbackManifest?.frames?.length) await preparePlayback();
+  if (!playbackManifest?.frames?.length) return;
+  const target = Math.max(0, triggerTimeMs(item));
+  const frames = playbackManifest.frames;
+  let low = 0, high = frames.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (frames[middle].relative_ms < target) low = middle + 1; else high = middle;
+  }
+  if (low > 0 && Math.abs(frames[low - 1].relative_ms - target) < Math.abs(frames[low].relative_ms - target)) low -= 1;
+  pausePlayback();
+  renderPlaybackFrame(low, true);
+}
+
+function anomalyLabel(status) {
+  return {early: '早すぎ', late: '遅延', missing_suspected: '欠落疑い'}[status] || status;
+}
+
+function renderTriggerAnalysis(analysis) {
+  triggerAnalysis = analysis;
+  $('triggerDiagnosticPanel').hidden = !analysis.available;
+  $('triggerDiagnosticEmpty').hidden = analysis.available;
+  if (!analysis.available) {
+    $('triggerDiagnosticEmpty').textContent = analysis.reason || 'トリガー情報を解析できません。';
+    $('triggerDiagnosticRange').textContent = '解析対象なし';
+    return;
+  }
+  $('triggerExpectedMetric').textContent = `${Number(analysis.expected_period_ms).toFixed(3)} ms / ${Number(analysis.expected_frequency_hz).toFixed(2)} Hz`;
+  $('triggerJitterMetric').textContent = `±${Number(analysis.p95_deviation_us).toFixed(0)} µs`;
+  $('triggerAnomalyMetric').textContent = `${analysis.anomaly_count} / ${analysis.interval_count}`;
+  $('triggerMissingMetric').textContent = analysis.estimated_missing_edges;
+  $('triggerDiagnosticRange').textContent = `正常範囲 ${Number(analysis.lower_period_ms).toFixed(3)}–${Number(analysis.upper_period_ms).toFixed(3)} ms · 自動判定`;
+  const list = $('triggerAnomalyList');
+  list.replaceChildren();
+  const anomalies = analysis.anomalies || [];
+  if (!anomalies.length) {
+    const empty = document.createElement('div');
+    empty.className = 'session-list-empty'; empty.textContent = '異常なトリガー間隔は検出されませんでした。';
+    list.append(empty);
+  } else {
+    anomalies.slice(0, 200).forEach(item => {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'trigger-anomaly-item';
+      const time = Number.isFinite(Number(item.host_relative_ms)) ? `${(Number(item.host_relative_ms) / 1000).toFixed(3)} s` : `#${item.trigger_index}`;
+      const missing = item.estimated_missing ? ` · ${item.estimated_missing} edge欠落推定` : '';
+      button.innerHTML = `<span>${time}</span><span>${Number(item.interval_ms).toFixed(3)} ms</span><span>${Number(item.deviation_us) >= 0 ? '+' : ''}${Number(item.deviation_us).toFixed(0)} µs</span><span class="${item.status}">${anomalyLabel(item.status)}${missing}</span>`;
+      button.addEventListener('click', () => seekToTrigger(item).catch(error => showToast(error.message, 'error')));
+      list.append(button);
+    });
+    if (anomalies.length > 200) {
+      const note = document.createElement('div'); note.className = 'session-list-empty';
+      note.textContent = `先頭200件を表示（全${anomalies.length}件）`; list.append(note);
+    }
+  }
+  window.requestAnimationFrame(renderTriggerChart);
+}
+
+async function loadTriggerAnalysis(sessionId) {
+  $('triggerDiagnosticPanel').hidden = true;
+  $('triggerDiagnosticEmpty').hidden = false;
+  $('triggerDiagnosticEmpty').textContent = 'トリガー間隔を解析中…';
+  $('triggerDiagnosticRange').textContent = '基準周期を解析中…';
+  try {
+    const data = await requestJson(`${API.frame}/recordings/${encodeURIComponent(sessionId)}/trigger-analysis`);
+    if (selectedRecordingId !== sessionId) return;
+    renderTriggerAnalysis(data.analysis);
+  } catch (error) {
+    if (selectedRecordingId !== sessionId) return;
+    renderTriggerAnalysis({available: false, reason: error.message});
+  }
+}
+
+function playbackPalette() {
+  return $('playbackPalette').value || 'mono';
+}
+
+function eventOverlayUrl(sessionId, frame, width, maxEvents) {
+  const windowUs = Number($('playbackWindow').value) || 33000;
+  return `${API.frame}/recordings/${encodeURIComponent(sessionId)}/events/${frame.stream_epoch}/${frame.raw_time_us}.png` +
+    `?window_us=${windowUs}&width=${width}&max_events=${maxEvents}&palette=${playbackPalette()}`;
 }
 
 function playbackEvsSettings() {
@@ -232,7 +422,6 @@ function renderPlaybackFrame(index, forceEvs = false) {
   playbackIndex = Math.max(0, Math.min(Number(index) || 0, playbackManifest.frames.length - 1));
   const frame = playbackManifest.frames[playbackIndex];
   const sessionId = playbackManifest.session_id;
-  const windowUs = Number($('playbackWindow').value) || playbackManifest.event_window_us || 33000;
   $('playbackSlider').value = playbackIndex;
   $('playbackFrameImage').src = `${API.frame}/recordings/${encodeURIComponent(sessionId)}/preview/${encodeURIComponent(frame.filename)}`;
   const evsSettings = playbackEvsSettings();
@@ -240,14 +429,22 @@ function renderPlaybackFrame(index, forceEvs = false) {
   const updateEvs = forceEvs || !playbackRunning || frame.stream_epoch !== lastPlaybackEvsEpoch ||
     frame.relative_ms - lastPlaybackEvsMs >= evsIntervalMs - 0.5;
   if (updateEvs) {
-    $('playbackEvsImage').src = `${API.frame}/recordings/${encodeURIComponent(sessionId)}/events/${frame.stream_epoch}/${frame.raw_time_us}.png?window_us=${windowUs}&width=960&max_events=${evsSettings.maxEvents}`;
+    $('playbackEvsImage').src = eventOverlayUrl(sessionId, frame, 960, evsSettings.maxEvents);
     lastPlaybackEvsMs = frame.relative_ms;
     lastPlaybackEvsEpoch = frame.stream_epoch;
   }
   $('playbackTime').textContent = `${(frame.relative_ms / 1000).toFixed(3)} / ${(playbackManifest.duration_ms / 1000).toFixed(3)} s`;
+  const syncLabel = {
+    paired_trigger: 'Trigger精密同期',
+    host_time_interpolated: 'ホスト時刻補間',
+    segment_time_estimated: 'RAW開始時刻から概算'
+  }[frame.sync_mode] || '同期情報なし';
+  const anchorText = Number.isFinite(Number(frame.trigger_anchor_distance_ms))
+    ? ` · anchor ${Number(frame.trigger_anchor_distance_ms).toFixed(1)} ms` : '';
   $('playbackFrameMeta').textContent =
     `seq ${String(frame.sequence).padStart(6, '0')} · camera ID ${frame.camera_frame_id || '—'} · ` +
-    `EVS ${frame.raw_time_us} µs · epoch ${frame.stream_epoch}`;
+    `EVS ${frame.raw_time_us} µs · epoch ${frame.stream_epoch} · ${syncLabel}${anchorText}`;
+  updateTriggerPlaybackCursor(frame.relative_ms);
 }
 
 function playbackTick(now) {
@@ -259,7 +456,11 @@ function playbackTick(now) {
   while (nextIndex + 1 < frames.length && frames[nextIndex + 1].relative_ms <= targetMs) {
     nextIndex += 1;
   }
-  if (nextIndex !== playbackIndex) renderPlaybackFrame(nextIndex);
+  const finalFrame = nextIndex >= frames.length - 1;
+  if (nextIndex !== playbackIndex && (now - lastPlaybackRenderAt >= 1000 / 30 || finalFrame)) {
+    renderPlaybackFrame(nextIndex);
+    lastPlaybackRenderAt = now;
+  }
   if (playbackIndex >= frames.length - 1 && targetMs >= playbackManifest.duration_ms) {
     pausePlayback();
     return;
@@ -277,6 +478,7 @@ function togglePlayback() {
   playbackRunning = true;
   playbackWallStart = performance.now();
   playbackTimelineStart = playbackManifest.frames[playbackIndex].relative_ms;
+  lastPlaybackRenderAt = -Infinity;
   $('playbackPlayButton').textContent = 'Ⅱ 一時停止';
   playbackAnimationFrame = window.requestAnimationFrame(playbackTick);
 }
@@ -287,10 +489,14 @@ async function preparePlayback() {
   $('playbackMessage').textContent = '同期時刻とEVS RAWを読み込み中…';
   $('preparePlaybackButton').hidden = true;
   try {
-    const data = await requestJson(
-      `${API.frame}/recordings/${encodeURIComponent(selectedRecordingId)}/playback`);
-    if (selectedRecordingId !== data.playback.session_id) return;
-    playbackManifest = data.playback;
+    if (synchronizedPreviewManifest?.session_id === selectedRecordingId) {
+      playbackManifest = synchronizedPreviewManifest;
+    } else {
+      const data = await requestJson(
+        `${API.frame}/recordings/${encodeURIComponent(selectedRecordingId)}/playback`);
+      if (selectedRecordingId !== data.playback.session_id) return;
+      playbackManifest = data.playback;
+    }
     playbackIndex = 0;
     $('playbackSlider').max = Math.max(0, playbackManifest.frames.length - 1);
     $('playbackPlaceholder').hidden = true;
@@ -300,6 +506,94 @@ async function preparePlayback() {
     $('playbackMessage').textContent = error.message;
     $('preparePlaybackButton').hidden = false;
     throw error;
+  }
+}
+
+function refreshSynchronizedPreviewEvents() {
+  document.querySelectorAll('.saved-preview .event-overlay').forEach((image) => {
+    if (image.dataset.loaded === 'true') {
+      image.src = eventOverlayUrl(
+        image.dataset.sessionId,
+        {
+          stream_epoch: image.dataset.epoch,
+          raw_time_us: image.dataset.rawTimeUs
+        },
+        360,
+        12000
+      );
+    }
+  });
+}
+
+function renderSynchronizedPreviews(manifest, page = synchronizedPreviewPage) {
+  if (synchronizedPreviewObserver) synchronizedPreviewObserver.disconnect();
+  $('savedPreviewGrid').replaceChildren();
+  const pageCount = Math.max(1, Math.ceil(manifest.frames.length / SYNCHRONIZED_PREVIEW_PAGE_SIZE));
+  synchronizedPreviewPage = Math.max(0, Math.min(Number(page) || 0, pageCount - 1));
+  const start = synchronizedPreviewPage * SYNCHRONIZED_PREVIEW_PAGE_SIZE;
+  const end = Math.min(manifest.frames.length, start + SYNCHRONIZED_PREVIEW_PAGE_SIZE);
+  $('dataPreviewMeta').textContent = `${start + 1}–${end} / ${manifest.frames.length}`;
+  $('previewPreviousButton').disabled = synchronizedPreviewPage === 0;
+  $('previewNextButton').disabled = synchronizedPreviewPage >= pageCount - 1;
+  synchronizedPreviewObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const image = entry.target;
+      image.src = eventOverlayUrl(
+        image.dataset.sessionId,
+        {stream_epoch: image.dataset.epoch, raw_time_us: image.dataset.rawTimeUs},
+        360,
+        12000
+      );
+      image.dataset.loaded = 'true';
+      synchronizedPreviewObserver.unobserve(image);
+    });
+  }, {rootMargin: '500px 0px'});
+  const fragment = document.createDocumentFragment();
+  manifest.frames.slice(start, end).forEach((frame, localIndex) => {
+    const figure = document.createElement('div');
+    figure.className = 'saved-preview synchronized';
+    const stage = document.createElement('div');
+    stage.className = 'saved-preview-stage';
+    const frameImage = document.createElement('img');
+    frameImage.loading = 'lazy';
+    frameImage.alt = `Frame seq ${frame.sequence}`;
+    frameImage.src = `${API.frame}/recordings/${encodeURIComponent(manifest.session_id)}/preview/${encodeURIComponent(frame.filename)}`;
+    const eventImage = document.createElement('img');
+    eventImage.className = 'event-overlay';
+    eventImage.alt = `EVS seq ${frame.sequence}`;
+    eventImage.dataset.sessionId = manifest.session_id;
+    eventImage.dataset.epoch = frame.stream_epoch;
+    eventImage.dataset.rawTimeUs = frame.raw_time_us;
+    stage.append(frameImage, eventImage);
+    stage.addEventListener('click', () => {
+      playbackManifest = manifest;
+      $('playbackPlaceholder').hidden = true;
+      $('playbackContent').hidden = false;
+      $('playbackSlider').max = manifest.frames.length - 1;
+      renderPlaybackFrame(start + localIndex, true);
+    });
+    const caption = document.createElement('span');
+    caption.textContent = `seq ${String(frame.sequence).padStart(6, '0')} · ${frame.relative_ms.toFixed(3)} ms`;
+    figure.append(stage, caption);
+    fragment.appendChild(figure);
+    synchronizedPreviewObserver.observe(eventImage);
+  });
+  $('savedPreviewGrid').appendChild(fragment);
+}
+
+async function loadSynchronizedPreviews(sessionId) {
+  try {
+    const data = await requestJson(
+      `${API.frame}/recordings/${encodeURIComponent(sessionId)}/playback`);
+    if (selectedRecordingId !== sessionId) return;
+    synchronizedPreviewManifest = data.playback;
+    synchronizedPreviewPage = 0;
+    renderSynchronizedPreviews(data.playback, 0);
+  } catch (error) {
+    if (selectedRecordingId !== sessionId) return;
+    $('dataPreviewMeta').textContent = '同期プレビューを生成できません';
+    $('savedPreviewGrid').textContent = error.message;
   }
 }
 
@@ -328,32 +622,11 @@ async function selectRecording(sessionId) {
     $('dataRoiMetric').textContent = roi.width && roi.height ? `${roi.width}×${roi.height}` : '—';
     $('dataLossMetric').textContent = losses.total || 0;
     $('dataLossMetricBox').classList.toggle('alert', Boolean(losses.total));
-    $('dataPreviewMeta').textContent = `先頭 ${session.preview_images.length} 枚 / ${frame.saved_frames || 0}`;
+    $('dataPreviewMeta').textContent = '同期情報を読み込み中…';
     $('dataSizeMeta').textContent = `合計 ${formatBytes(session.total_size_bytes)}`;
     $('savedPreviewGrid').replaceChildren();
-    for (const filename of session.preview_images) {
-      const figure = document.createElement('div');
-      figure.className = 'saved-preview';
-      const image = document.createElement('img');
-      image.loading = 'lazy';
-      image.alt = `${session.session_id} · ${filename}`;
-      image.src = `${API.frame}/recordings/${encodeURIComponent(session.session_id)}/preview/${encodeURIComponent(filename)}`;
-      image.addEventListener('click', () => {
-        $('dialogVideo').src = image.src;
-        $('dialogTitle').textContent = image.alt;
-        dialog.showModal();
-      });
-      const caption = document.createElement('span');
-      caption.textContent = filename;
-      figure.append(image, caption);
-      $('savedPreviewGrid').appendChild(figure);
-    }
-    if (!session.preview_images.length) {
-      const empty = document.createElement('div');
-      empty.className = 'session-list-empty';
-      empty.textContent = 'プレビュー可能なPGM画像がありません。';
-      $('savedPreviewGrid').appendChild(empty);
-    }
+    loadSynchronizedPreviews(session.session_id);
+    loadTriggerAnalysis(session.session_id);
     $('dataFileList').replaceChildren(...session.files.map((file) => {
       const row = document.createElement('div');
       row.className = 'file-row';
@@ -770,9 +1043,31 @@ document.querySelectorAll('[data-action]').forEach((button) => {
 
 $('captureTabButton').addEventListener('click', () => setActivePage('capture'));
 $('dataTabButton').addEventListener('click', () => setActivePage('data'));
+$('mainMenuLink').addEventListener('click', (event) => {
+  if (!recording && !stoppingRecording) return;
+  event.preventDefault();
+  showToast('録画を停止して保存完了を確認してから、全体メニューへ戻ってください。', 'error');
+});
 $('recordingSearch').addEventListener('input', renderRecordingList);
 $('refreshRecordingsButton').addEventListener('click', () =>
   runAction($('refreshRecordingsButton'), loadRecordings));
+$('triggerTimingChart').addEventListener('pointermove', (event) => {
+  const point = nearestTriggerPoint(event);
+  if (!point) return;
+  const item = point.item;
+  $('triggerCursorText').textContent =
+    `${(triggerTimeMs(item) / 1000).toFixed(3)} s · Δt ${Number(item.interval_ms).toFixed(3)} ms · ${item.status === 'normal' ? '正常' : anomalyLabel(item.status)}`;
+});
+$('triggerTimingChart').addEventListener('pointerleave', () => {
+  $('triggerCursorText').textContent = '点を選ぶと同期再生位置へ移動します';
+});
+$('triggerTimingChart').addEventListener('click', (event) => {
+  const point = nearestTriggerPoint(event);
+  seekToTrigger(point?.item).catch(error => showToast(error.message, 'error'));
+});
+window.addEventListener('resize', () => {
+  if (triggerAnalysis?.available && !$('dataPage').hidden) renderTriggerChart();
+});
 $('copySessionPathButton').addEventListener('click', async () => {
   if (!selectedRecordingPath) return;
   try {
@@ -794,13 +1089,31 @@ $('playbackSpeed').addEventListener('change', () => {
   playbackWallStart = performance.now();
   playbackTimelineStart = playbackManifest.frames[playbackIndex].relative_ms;
 });
-$('playbackWindow').addEventListener('change', () => renderPlaybackFrame(playbackIndex, true));
+$('playbackWindow').addEventListener('change', () => {
+  renderPlaybackFrame(playbackIndex, true);
+  refreshSynchronizedPreviewEvents();
+});
 $('playbackEvsLoad').addEventListener('change', () => {
   lastPlaybackEvsMs = -Infinity;
   renderPlaybackFrame(playbackIndex, true);
 });
 $('playbackOpacity').addEventListener('input', () => {
   $('playbackEvsImage').style.opacity = $('playbackOpacity').value;
+});
+$('playbackPalette').addEventListener('change', () => {
+  $('playbackPaletteLabel').textContent = playbackPalette() === 'magenta_cyan'
+    ? 'FRAME + EVS · 負 シアン / 正 マゼンタ'
+    : 'FRAME + EVS · 負 黒 / 正 白';
+  renderPlaybackFrame(playbackIndex, true);
+  refreshSynchronizedPreviewEvents();
+});
+$('previewPreviousButton').addEventListener('click', () => {
+  if (synchronizedPreviewManifest) renderSynchronizedPreviews(
+    synchronizedPreviewManifest, synchronizedPreviewPage - 1);
+});
+$('previewNextButton').addEventListener('click', () => {
+  if (synchronizedPreviewManifest) renderSynchronizedPreviews(
+    synchronizedPreviewManifest, synchronizedPreviewPage + 1);
 });
 
 const dialog = $('videoDialog');

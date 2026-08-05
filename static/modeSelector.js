@@ -1,4 +1,5 @@
-const API='http://127.0.0.1:5000';
+const API=location.protocol==='http:'||location.protocol==='https:'
+  ? location.origin : 'http://127.0.0.1:5050';
 const $=id=>document.getElementById(id);
 async function loadCameras(){
   $('cameraMessage').textContent='カメラを検出しています…';
@@ -16,11 +17,14 @@ async function loadCameras(){
 async function launch(mode){
   document.querySelectorAll('.mode-card').forEach(button=>button.disabled=true);
   $('launchMessage').className='message';$('launchMessage').textContent='サービスを準備しています…';
+  const controller=new AbortController();
+  const timeout=window.setTimeout(()=>controller.abort(),15000);
   try{
-    const response=await fetch(`${API}/api/launch`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode,evs1:$('evs1').value,evs2:$('evs2').value})});
+    const response=await fetch(`${API}/api/launch`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode,evs1:$('evs1').value,evs2:$('evs2').value}),signal:controller.signal});
     const data=await response.json();if(!response.ok)throw new Error(data.message||`HTTP ${response.status}`);
     window.location.href=data.viewer_url;
-  }catch(error){$('launchMessage').className='message error';$('launchMessage').textContent=error.message;document.querySelectorAll('.mode-card').forEach(button=>button.disabled=false);}
+  }catch(error){$('launchMessage').className='message error';$('launchMessage').textContent=error.name==='AbortError'?'起動APIが15秒以内に応答しませんでした。ランチャーを再起動してください。':error.message;document.querySelectorAll('.mode-card').forEach(button=>button.disabled=false);}
+  finally{window.clearTimeout(timeout);}
 }
 document.querySelectorAll('.mode-card').forEach(button=>button.addEventListener('click',()=>launch(button.dataset.mode)));
 $('refreshCameras').addEventListener('click',loadCameras);loadCameras();

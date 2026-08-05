@@ -8,7 +8,8 @@ import cv2
 import numpy as np
 
 from bothviewer.core.recordings import (
-    list_sessions, playback_manifest, render_preview_jpeg, session_detail,
+    _render_event_overlay_png, list_sessions, playback_manifest,
+    render_preview_jpeg, session_detail, trigger_timing_analysis,
 )
 
 
@@ -53,9 +54,22 @@ class RecordingCatalogTests(unittest.TestCase):
                 output.write(image.tobytes())
         with open(os.path.join(session, "frame", "frame_events.csv"),
                   "w", encoding="utf-8") as output:
-            output.write("sequence,status\n0,complete\n1,complete\n")
+            output.write(
+                "sequence,host_utc_ns,camera_frame_id,frame_status,missing_before,filename\n"
+                "0,2000000000,10,FrameStatus.Complete,0,frame_000.pgm\n"
+                "1,2100000000,11,FrameStatus.Complete,0,frame_001.pgm\n")
+        with open(os.path.join(session, "frame", "saved_frames.csv"),
+                  "w", encoding="utf-8") as output:
+            output.write(
+                "filename,write_ok\n"
+                "frame_000.pgm,1\n"
+                "frame_001.pgm,1\n")
         with open(os.path.join(evs, "triggers.csv"), "w", encoding="utf-8") as output:
-            output.write("stream_epoch,evs_timestamp_us,polarity\n0,1000000,1\n")
+            output.write(
+                "trigger_index,stream_epoch,evs_timestamp_us,polarity,channel_id,host_decode_utc_ns\n"
+                "0,0,1000000,1,0,1900000000\n"
+                "1,0,1010000,1,0,2000000000\n"
+                "2,0,1110000,1,0,2100000000\n")
         with open(os.path.join(session, "synchronization.csv"),
                   "w", encoding="utf-8") as output:
             output.write(
@@ -106,6 +120,87 @@ class RecordingCatalogTests(unittest.TestCase):
             self.assertEqual(manifest["duration_ms"], 100.0)
             self.assertEqual(manifest["frames"][0]["raw_time_us"], 10_100)
             self.assertEqual(manifest["frames"][1]["relative_ms"], 100.0)
+
+    def test_rebuilds_playback_index_when_synchronization_csv_is_missing(self):
+        with tempfile.TemporaryDirectory() as root:
+            session_id = self.make_session(root)
+            session_path = os.path.join(root, session_id)
+            os.unlink(os.path.join(session_path, "synchronization.csv"))
+
+            with mock.patch(
+                    "bothviewer.core.recordings._first_raw_trigger_us", return_value=100):
+                manifest = playback_manifest(root, session_id)
+
+            self.assertEqual(manifest["frame_count"], 2)
+            self.assertTrue(os.path.isfile(
+                os.path.join(session_path, "synchronization.jsonl")))
+            self.assertTrue(os.path.isfile(
+                os.path.join(session_path, "synchronization_summary.json")))
+
+    def test_playback_continues_after_frame_trigger_correspondence_is_lost(self):
+        with tempfile.TemporaryDirectory() as root:
+            session_id = self.make_session(root)
+            session = os.path.join(root, session_id)
+            image = np.arange(64, dtype=np.uint8).reshape(8, 8) + 2
+            with open(os.path.join(session, "frame", "images", "frame_002.pgm"), "wb") as output:
+                output.write(b"P5\n8 8\n255\n")
+                output.write(image.tobytes())
+            with open(os.path.join(session, "frame", "frame_events.csv"), "a", encoding="utf-8") as output:
+                output.write("2,2200000000,12,FrameStatus.Complete,0,frame_002.pgm\n")
+            with open(os.path.join(session, "frame", "saved_frames.csv"), "a", encoding="utf-8") as output:
+                output.write("frame_002.pgm,1\n")
+
+            with mock.patch(
+                    "bothviewer.core.recordings._first_raw_trigger_us", return_value=100):
+                manifest = playback_manifest(root, session_id)
+
+            self.assertEqual(manifest["frame_count"], 3)
+            self.assertEqual(manifest["duration_ms"], 200.0)
+            self.assertEqual(manifest["frames"][-1]["sync_mode"], "host_time_interpolated")
+            self.assertTrue(manifest["partial_synchronization"])
+
+    def test_renders_magenta_cyan_event_overlay(self):
+        events = np.array(
+            [(10, 20, 0, 1), (11, 20, 1, 2)],
+            dtype=[("x", "u2"), ("y", "u2"), ("p", "i2"), ("t", "i8")])
+        state = mock.Mock()
+        state.read_window.return_value = events
+        _render_event_overlay_png.cache_clear()
+        with mock.patch("bothviewer.core.recordings._raw_state", return_value=state):
+            encoded = _render_event_overlay_png(
+                "dummy.raw", 20_000, 33_000, 1280, 0, "magenta_cyan")
+        decoded = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        self.assertEqual(decoded[20, 1280 - 1 - 10, :3].tolist(), [255, 255, 0])
+        self.assertEqual(decoded[20, 1280 - 1 - 11, :3].tolist(), [255, 0, 255])
+
+    def test_trigger_timing_analysis_detects_early_and_missing_edges(self):
+        with tempfile.TemporaryDirectory() as root:
+            session_id = "trigger-analysis"
+            session = os.path.join(root, session_id)
+            evs = os.path.join(session, "evs")
+            os.makedirs(evs)
+            with open(os.path.join(evs, "triggers.csv"), "w", encoding="utf-8") as output:
+                output.write(
+                    "trigger_index,stream_epoch,evs_timestamp_us,polarity,host_decode_utc_ns\n"
+                    "0,0,0,1,1000000000\n"
+                    "1,0,10000,1,1010000000\n"
+                    "2,0,20000,1,1020000000\n"
+                    "3,0,30000,1,1030000000\n"
+                    "4,0,40000,1,1040000000\n"
+                    "5,0,45000,1,1045000000\n"
+                    "6,0,50000,1,1050000000\n"
+                    "7,0,60000,1,1060000000\n"
+                    "8,0,70000,1,1070000000\n"
+                    "9,0,90000,1,1090000000\n")
+
+            analysis = trigger_timing_analysis(root, session_id)
+
+            self.assertTrue(analysis["available"])
+            self.assertEqual(analysis["expected_period_ms"], 10.0)
+            self.assertEqual(analysis["counts"]["early"], 2)
+            self.assertEqual(analysis["counts"]["missing_suspected"], 1)
+            self.assertEqual(analysis["estimated_missing_edges"], 1)
+            self.assertEqual(analysis["anomaly_count"], 3)
 
 
 if __name__ == "__main__":

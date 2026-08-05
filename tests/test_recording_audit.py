@@ -7,6 +7,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 import cv2
 import numpy as np
@@ -15,7 +16,9 @@ from bothviewer.cameras.evs import EVSStreamer
 from bothviewer.cameras.frame import (
     CameraThread, FrameStreamer, ImageWriterThread, calculate_evs_matching_frame_roi)
 from bothviewer.core.preview import LatestFramePreview
-from bothviewer.core.synchronization import build_synchronization_report
+from bothviewer.core.synchronization import (
+    build_synchronization_report, load_or_rebuild_synchronization,
+)
 
 
 class FakeFeature:
@@ -501,6 +504,8 @@ class RecordingAuditTests(unittest.TestCase):
             self.assertEqual(summary["matched"], 2)
             self.assertEqual(summary["frames_without_saved_image"], 1)
             self.assertEqual(summary["frame_events_missing_from_id_gaps"], 1)
+            self.assertTrue(summary["cache_written"])
+            self.assertTrue(os.path.isfile(os.path.join(root, "synchronization.jsonl")))
 
             with open(os.path.join(root, "synchronization.csv"), newline="") as file:
                 rows = list(csv.DictReader(file))
@@ -509,6 +514,18 @@ class RecordingAuditTests(unittest.TestCase):
                 ["matched", "frame_event_missing", "trigger_without_saved_image"],
             )
             self.assertEqual(rows[-1]["trigger_index"], "2")
+
+            os.unlink(os.path.join(root, "synchronization.jsonl"))
+            os.unlink(os.path.join(root, "synchronization.csv"))
+            with mock.patch(
+                    "bothviewer.core.synchronization._persist_index",
+                    side_effect=OSError("disk busy")):
+                rebuilt, rebuilt_rows = load_or_rebuild_synchronization(
+                    root, "session-test")
+            self.assertTrue(rebuilt["generated"])
+            self.assertTrue(rebuilt["reconstructed"])
+            self.assertFalse(rebuilt["cache_written"])
+            self.assertEqual(len(rebuilt_rows), 3)
 
 
 if __name__ == "__main__":

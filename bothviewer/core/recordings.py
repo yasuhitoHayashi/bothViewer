@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 import cv2
 import numpy as np
 
+from bothviewer.core.synchronization import load_or_rebuild_synchronization
+
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 IMAGE_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+\.pgm$")
@@ -22,6 +24,11 @@ EVS_ROLES = ("evs", "evs_a", "evs_b")
 _RAW_STATE_LOCK = threading.Lock()
 _RAW_STATES = OrderedDict()
 _RAW_STATE_LIMIT = 4
+# EventCD is 16 bytes in OpenEB 5.2.  This raises the SDK default from 10M
+# (about 160 MB) to 20M events (about 320 MB) without making each cached reader
+# excessively large on lower-memory acquisition PCs.
+RAW_READER_MAX_EVENTS = 20_000_000
+RAW_INSPECTION_SLICE_US = 50_000
 
 
 def _read_json(path, default=None):
@@ -52,6 +59,13 @@ def _summary_for(session_path):
     synchronization = (
         session.get("synchronization")
         if isinstance(session.get("synchronization"), dict) else {})
+    cached_synchronization = _read_json(
+        os.path.join(session_path, "synchronization_summary.json"))
+    if cached_synchronization:
+        synchronization = cached_synchronization
+    if not synchronization or not synchronization.get("generated", True):
+        synchronization, _ = load_or_rebuild_synchronization(
+            session_path, os.path.basename(session_path))
     if not frame:
         frame = _read_json(os.path.join(session_path, "frame", "frame_summary.json"))
     if not evs:
@@ -166,8 +180,9 @@ def session_detail(save_location, session_id, preview_limit=4):
         "size_bytes": image_bytes,
     }]
     for relative_path in (
-            "frame/frame_events.csv", "frame/write_results.csv", "synchronization.csv",
-            "frame/camera_settings.json", "session.json"):
+            "frame/frame_events.csv", "frame/saved_frames.csv",
+            "synchronization.jsonl", "synchronization_summary.json",
+            "synchronization.csv", "frame/camera_settings.json", "session.json"):
         entry = _file_entry(session_path, relative_path)
         if entry:
             files.append(entry)
@@ -235,6 +250,66 @@ def _raw_name_for_epoch(epoch):
     return "events.raw" if epoch == 0 else f"events_{epoch:03d}.raw"
 
 
+def _safe_raw_path(raw_path):
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError("RAWファイルを選択してください。")
+    path = os.path.realpath(os.path.abspath(os.path.expanduser(raw_path.strip())))
+    if os.path.splitext(path)[1].lower() != ".raw":
+        raise ValueError(".rawファイルのみ開けます。")
+    if not os.path.isfile(path):
+        raise FileNotFoundError("RAWファイルが見つかりません。")
+    return path
+
+
+@lru_cache(maxsize=16)
+def _inspect_raw_file_cached(raw_path, size_bytes, modified_ns):
+    del size_bytes, modified_ns
+    from metavision_core.event_io.raw_reader import RawReader
+
+    reader = RawReader(
+        raw_path, max_events=RAW_READER_MAX_EVENTS, do_time_shifting=True)
+    height, width = reader.get_size()
+    duration_us = 0
+    event_count = 0
+    while not reader.is_done():
+        # A one-second request can exceed RawReader's rolling buffer on dense
+        # recordings even though only the final timestamp is needed here.
+        events = reader.load_delta_t(RAW_INSPECTION_SLICE_US)
+        event_count += len(events)
+        if len(events):
+            duration_us = max(duration_us, int(events["t"][-1]))
+    return {
+        "duration_us": max(1, duration_us),
+        "event_count": event_count,
+        "sensor_width": int(width),
+        "sensor_height": int(height),
+    }
+
+
+def inspect_raw_file(raw_path, interval_us=33_000):
+    """Inspect a standalone Metavision RAW file and build a playback manifest."""
+    path = _safe_raw_path(raw_path)
+    stat = os.stat(path)
+    interval_us = max(5_000, min(int(interval_us), 500_000))
+    info = _inspect_raw_file_cached(path, stat.st_size, stat.st_mtime_ns)
+    return {
+        "filename": os.path.basename(path),
+        "file_size_bytes": stat.st_size,
+        "duration_us": info["duration_us"],
+        "event_count": info["event_count"],
+        "sensor_width": info["sensor_width"],
+        "sensor_height": info["sensor_height"],
+        "interval_us": interval_us,
+        "segments": [{
+            "epoch": 0,
+            "filename": os.path.basename(path),
+            "start_us": 0,
+            "end_us": info["duration_us"],
+        }],
+        "source_type": "standalone_raw",
+    }
+
+
 def _validate_evs_role(role):
     if role not in EVS_ROLES:
         raise ValueError("EVS roleが不正です。")
@@ -288,75 +363,356 @@ def evs_playback_manifest(save_location, session_id, role="evs", interval_us=33_
     }
 
 
+def trigger_timing_analysis(save_location, session_id, role="evs"):
+    """Analyze periodic reference-trigger timing and identify suspicious edges."""
+    session_path = _safe_session_path(save_location, session_id)
+    role = _validate_evs_role(role)
+    trigger_path = os.path.join(session_path, role, "triggers.csv")
+    if not os.path.isfile(trigger_path):
+        raise FileNotFoundError(f"{role}/triggers.csvがありません。")
+
+    synchronization, _ = load_or_rebuild_synchronization(
+        session_path, session_id, persist=False)
+    reference_polarity = int(synchronization.get("reference_trigger_polarity", 1) or 0)
+    with open(trigger_path, newline="", encoding="utf-8") as source:
+        all_rows = list(csv.DictReader(source))
+    rows = []
+    for row in all_rows:
+        try:
+            if int(row.get("polarity", -1)) != reference_polarity:
+                continue
+            rows.append({
+                "trigger_index": int(row.get("trigger_index", len(rows))),
+                "stream_epoch": int(row.get("stream_epoch") or 0),
+                "sensor_us": int(row["evs_timestamp_us"]),
+                "host_ns": int(row.get("host_decode_utc_ns") or 0),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    if len(rows) < 2:
+        return {
+            "available": False,
+            "reason": "周期判定に必要な基準エッジが2件以上ありません。",
+            "reference_polarity": reference_polarity,
+            "edge_count": len(rows),
+        }
+
+    intervals = []
+    previous_by_epoch = {}
+    for edge in rows:
+        previous = previous_by_epoch.get(edge["stream_epoch"])
+        previous_by_epoch[edge["stream_epoch"]] = edge
+        if previous is None:
+            continue
+        interval_us = edge["sensor_us"] - previous["sensor_us"]
+        if interval_us <= 0:
+            continue
+        intervals.append((edge, interval_us))
+    if not intervals:
+        return {
+            "available": False,
+            "reason": "有効なトリガー間隔を計算できません。",
+            "reference_polarity": reference_polarity,
+            "edge_count": len(rows),
+        }
+
+    values = np.asarray([item[1] for item in intervals], dtype=np.float64)
+    expected_us = float(np.median(values))
+    deviations = np.abs(values - expected_us)
+    mad_us = float(np.median(deviations))
+    # At least 5% is allowed; stable clocks use six MADs to avoid flagging normal
+    # quantization jitter. 50 us prevents over-sensitivity at high trigger rates.
+    tolerance_us = max(expected_us * 0.05, mad_us * 6.0, 50.0)
+    lower_us = max(0.0, expected_us - tolerance_us)
+    upper_us = expected_us + tolerance_us
+
+    first_frame_host_ns = 0
+    frame_events_path = os.path.join(session_path, "frame", "frame_events.csv")
+    if os.path.isfile(frame_events_path):
+        try:
+            with open(frame_events_path, newline="", encoding="utf-8") as source:
+                first_frame = next(csv.DictReader(source), None)
+            first_frame_host_ns = int((first_frame or {}).get("host_utc_ns") or 0)
+        except (OSError, TypeError, ValueError):
+            first_frame_host_ns = 0
+    first_host_ns = first_frame_host_ns or next(
+        (edge["host_ns"] for edge in rows if edge["host_ns"]), 0)
+
+    result_intervals = []
+    counts = {"normal": 0, "early": 0, "late": 0, "missing_suspected": 0}
+    estimated_missing = 0
+    for sequence, (edge, interval_us) in enumerate(intervals):
+        status = "normal"
+        missing_count = 0
+        if interval_us < lower_us:
+            status = "early"
+        elif interval_us > upper_us:
+            ratio = interval_us / expected_us if expected_us else 0
+            if ratio >= 1.5:
+                status = "missing_suspected"
+                missing_count = max(1, round(ratio) - 1)
+                estimated_missing += missing_count
+            else:
+                status = "late"
+        counts[status] += 1
+        host_relative_ms = (
+            (edge["host_ns"] - first_host_ns) / 1e6
+            if edge["host_ns"] and first_host_ns else None)
+        result_intervals.append({
+            "sequence": sequence,
+            "trigger_index": edge["trigger_index"],
+            "stream_epoch": edge["stream_epoch"],
+            "interval_us": interval_us,
+            "interval_ms": round(interval_us / 1000.0, 6),
+            "deviation_us": round(interval_us - expected_us, 3),
+            "status": status,
+            "estimated_missing": missing_count,
+            "host_relative_ms": (
+                round(host_relative_ms, 3) if host_relative_ms is not None else None),
+        })
+
+    # Preserve every anomaly. Downsample only normal points for very long runs.
+    anomalies = [item for item in result_intervals if item["status"] != "normal"]
+    normal = [item for item in result_intervals if item["status"] == "normal"]
+    if len(normal) > 4000:
+        stride = math.ceil(len(normal) / 4000)
+        normal = normal[::stride]
+    display_intervals = sorted(normal + anomalies, key=lambda item: item["sequence"])
+    p95_deviation_us = float(np.percentile(deviations, 95))
+    return {
+        "available": True,
+        "session_id": session_id,
+        "role": role,
+        "reference_polarity": reference_polarity,
+        "reference_edge": synchronization.get("reference_edge", "ExposureActive start"),
+        "edge_count": len(rows),
+        "interval_count": len(intervals),
+        "expected_period_us": round(expected_us, 3),
+        "expected_period_ms": round(expected_us / 1000.0, 6),
+        "expected_frequency_hz": round(1_000_000.0 / expected_us, 6),
+        "tolerance_us": round(tolerance_us, 3),
+        "lower_period_ms": round(lower_us / 1000.0, 6),
+        "upper_period_ms": round(upper_us / 1000.0, 6),
+        "mad_us": round(mad_us, 3),
+        "p95_deviation_us": round(p95_deviation_us, 3),
+        "maximum_deviation_us": round(float(np.max(deviations)), 3),
+        "anomaly_count": len(anomalies),
+        "estimated_missing_edges": estimated_missing,
+        "counts": counts,
+        "intervals": display_intervals,
+        "anomalies": anomalies,
+        "normal_points_sampled": len(normal),
+    }
+
+
 def _first_raw_trigger_us(raw_path):
     from metavision_core.event_io.raw_reader import RawReader
 
-    reader = RawReader(raw_path, do_time_shifting=True, use_external_triggers=[0])
-    reader.load_delta_t(500_000)
-    triggers = reader.get_ext_trigger_events()
-    if not len(triggers):
-        return None
-    return int(triggers["t"][0])
+    reader = RawReader(
+        raw_path, max_events=RAW_READER_MAX_EVENTS, do_time_shifting=True,
+        use_external_triggers=[0])
+    for _ in range(10):
+        reader.load_delta_t(RAW_INSPECTION_SLICE_US)
+        triggers = reader.get_ext_trigger_events()
+        if len(triggers):
+            return int(triggers["t"][0])
+        if reader.is_done():
+            break
+    return None
 
 
 def playback_manifest(save_location, session_id):
     session_path = _safe_session_path(save_location, session_id)
-    _, frame_summary, _, _ = _summary_for(session_path)
-    synchronization_path = os.path.join(session_path, "synchronization.csv")
+    _, frame_summary, evs_summary, _ = _summary_for(session_path)
     triggers_path = os.path.join(session_path, "evs", "triggers.csv")
-    if not os.path.isfile(synchronization_path):
-        raise FileNotFoundError("synchronization.csvがありません。")
+    synchronization, synchronization_rows = load_or_rebuild_synchronization(
+        session_path, session_id)
 
     first_sensor_trigger_by_epoch = {}
+    anchors_by_epoch = {}
     if os.path.isfile(triggers_path):
         with open(triggers_path, newline="", encoding="utf-8") as source:
             for row in csv.DictReader(source):
                 try:
                     epoch = int(row.get("stream_epoch") or 0)
                     sensor_time = int(row["evs_timestamp_us"])
+                    host_ns = int(row.get("host_decode_utc_ns") or 0)
                 except (KeyError, TypeError, ValueError):
                     continue
                 first_sensor_trigger_by_epoch.setdefault(epoch, sensor_time)
+                if host_ns:
+                    anchors_by_epoch.setdefault(epoch, []).append(
+                        {"sensor_us": sensor_time, "host_ns": host_ns})
 
     raw_offsets = {}
     raw_files = {}
-    for epoch, sensor_time in first_sensor_trigger_by_epoch.items():
+    evs_folder = os.path.join(session_path, "evs")
+    candidate_epochs = set(first_sensor_trigger_by_epoch)
+    candidate_epochs.update(range(len(evs_summary.get("raw_files") or [])))
+    if os.path.isdir(evs_folder):
+        for name in os.listdir(evs_folder):
+            match = re.fullmatch(r"events(?:_(\d+))?\.raw", name)
+            if match:
+                candidate_epochs.add(int(match.group(1) or 0))
+    for epoch in sorted(candidate_epochs):
         raw_name = _raw_name_for_epoch(epoch)
-        raw_path = os.path.join(session_path, "evs", raw_name)
+        raw_path = os.path.join(evs_folder, raw_name)
         if not os.path.isfile(raw_path):
             continue
-        first_raw_trigger = _first_raw_trigger_us(raw_path)
-        if first_raw_trigger is None:
-            continue
-        raw_offsets[epoch] = sensor_time - first_raw_trigger
         raw_files[epoch] = raw_name
+        sensor_time = first_sensor_trigger_by_epoch.get(epoch)
+        if sensor_time is not None:
+            first_raw_trigger = _first_raw_trigger_us(raw_path)
+            if first_raw_trigger is not None:
+                raw_offsets[epoch] = sensor_time - first_raw_trigger
 
-    frames = []
+    epoch_start_host_ns = {0: int(evs_summary.get("started_utc_ns", 0) or 0)}
+    connection_path = os.path.join(evs_folder, "connection_events.csv")
+    if os.path.isfile(connection_path):
+        with open(connection_path, newline="", encoding="utf-8") as source:
+            for row in csv.DictReader(source):
+                if row.get("event") != "reconnected":
+                    continue
+                try:
+                    epoch_start_host_ns[int(row.get("stream_epoch") or 0)] = int(
+                        row["host_utc_ns"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+
+    exact_by_filename = {
+        row.get("frame_filename"): row for row in synchronization_rows
+        if row.get("match_status") == "matched" and row.get("frame_filename")}
+    initial_differences = []
+    for row in synchronization_rows:
+        if row.get("match_status") != "matched":
+            continue
+        try:
+            initial_differences.append(float(row["host_time_difference_ms"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if len(initial_differences) >= 30:
+            break
+    if initial_differences:
+        difference_baseline_ms = float(np.median(initial_differences))
+        difference_mad_ms = float(np.median(np.abs(
+            np.asarray(initial_differences) - difference_baseline_ms)))
+        difference_tolerance_ms = max(5.0, difference_mad_ms * 6.0)
+    else:
+        difference_baseline_ms = 0.0
+        difference_tolerance_ms = math.inf
+
     images_path = os.path.join(session_path, "frame", "images")
-    with open(synchronization_path, newline="", encoding="utf-8") as source:
-        for row in csv.DictReader(source):
-            if row.get("match_status") != "matched" or not row.get("frame_filename"):
-                continue
-            filename = row["frame_filename"]
-            if not IMAGE_PATTERN.fullmatch(filename) or not os.path.isfile(
-                    os.path.join(images_path, filename)):
+    saved_filenames = set()
+    saved_path = os.path.join(session_path, "frame", "saved_frames.csv")
+    if os.path.isfile(saved_path):
+        with open(saved_path, newline="", encoding="utf-8") as source:
+            saved_filenames = {
+                row.get("filename", "") for row in csv.DictReader(source)
+                if str(row.get("write_ok", "")).lower() in ("1", "true")}
+
+    frame_rows = []
+    frame_events_path = os.path.join(session_path, "frame", "frame_events.csv")
+    if os.path.isfile(frame_events_path):
+        with open(frame_events_path, newline="", encoding="utf-8") as source:
+            for row in csv.DictReader(source):
+                filename = row.get("filename", "")
+                if (not filename or not IMAGE_PATTERN.fullmatch(filename) or
+                        not os.path.isfile(os.path.join(images_path, filename)) or
+                        (saved_filenames and filename not in saved_filenames)):
+                    continue
+                try:
+                    frame_rows.append({
+                        "sequence": int(row.get("sequence") or len(frame_rows)),
+                        "filename": filename,
+                        "camera_frame_id": row.get("camera_frame_id"),
+                        "host_utc_ns": int(row.get("host_utc_ns") or 0),
+                    })
+                except (TypeError, ValueError):
+                    continue
+    # Compatibility with old sessions that only retain synchronization.csv.
+    if not frame_rows:
+        for row in synchronization_rows:
+            filename = row.get("frame_filename", "")
+            if (row.get("match_status") != "matched" or
+                    not IMAGE_PATTERN.fullmatch(filename) or
+                    not os.path.isfile(os.path.join(images_path, filename))):
                 continue
             try:
-                epoch = int(row.get("trigger_stream_epoch") or 0)
-                sensor_time = int(row["evs_timestamp_us"])
-                sequence = int(row.get("frame_sequence") or len(frames))
-            except (TypeError, ValueError, KeyError):
+                frame_rows.append({
+                    "sequence": int(row.get("frame_sequence") or len(frame_rows)),
+                    "filename": filename,
+                    "camera_frame_id": row.get("camera_frame_id"),
+                    "host_utc_ns": int(row.get("frame_host_utc_ns") or 0),
+                })
+            except (TypeError, ValueError):
                 continue
-            if epoch not in raw_offsets:
-                continue
-            frames.append({
-                "sequence": sequence,
-                "filename": filename,
-                "stream_epoch": epoch,
-                "raw_time_us": max(0, sensor_time - raw_offsets[epoch]),
-                "camera_frame_id": row.get("camera_frame_id"),
-                "host_utc_ns": int(row.get("frame_host_utc_ns") or 0),
-            })
+
+    frames = []
+    for frame in frame_rows:
+        exact = exact_by_filename.get(frame["filename"])
+        epoch = None
+        raw_time_us = None
+        sync_mode = None
+        anchor_distance_ms = None
+        if exact:
+            try:
+                difference_ms = float(exact.get("host_time_difference_ms", ""))
+                reliable = abs(
+                    difference_ms - difference_baseline_ms) <= difference_tolerance_ms
+            except (TypeError, ValueError):
+                reliable = True
+            try:
+                exact_epoch = int(exact.get("trigger_stream_epoch") or 0)
+                if reliable and exact_epoch in raw_offsets:
+                    epoch = exact_epoch
+                    raw_time_us = max(
+                        0, int(exact["evs_timestamp_us"]) - raw_offsets[exact_epoch])
+                    sync_mode = "paired_trigger"
+                    try:
+                        anchor_distance_ms = abs(float(exact["host_time_difference_ms"]))
+                    except (KeyError, TypeError, ValueError):
+                        pass
+            except (KeyError, TypeError, ValueError):
+                pass
+
+        if raw_time_us is None and frame["host_utc_ns"]:
+            anchor_candidates = [
+                (abs(anchor["host_ns"] - frame["host_utc_ns"]), candidate_epoch, anchor)
+                for candidate_epoch, anchors in anchors_by_epoch.items()
+                if candidate_epoch in raw_offsets
+                for anchor in anchors]
+            if anchor_candidates:
+                distance_ns, epoch, anchor = min(
+                    anchor_candidates, key=lambda item: item[0])
+                sensor_time = anchor["sensor_us"] + round(
+                    (frame["host_utc_ns"] - anchor["host_ns"]) / 1000)
+                raw_time_us = max(0, sensor_time - raw_offsets[epoch])
+                sync_mode = "host_time_interpolated"
+                anchor_distance_ms = round(distance_ns / 1e6, 3)
+
+        if raw_time_us is None and frame["host_utc_ns"] and raw_files:
+            eligible = [
+                (start_ns, candidate_epoch)
+                for candidate_epoch, start_ns in epoch_start_host_ns.items()
+                if candidate_epoch in raw_files and start_ns and
+                start_ns <= frame["host_utc_ns"]]
+            if eligible:
+                start_ns, epoch = max(eligible)
+            else:
+                epoch = min(raw_files)
+                start_ns = epoch_start_host_ns.get(epoch) or frame["host_utc_ns"]
+            raw_time_us = max(0, round((frame["host_utc_ns"] - start_ns) / 1000))
+            sync_mode = "segment_time_estimated"
+
+        if raw_time_us is None or epoch not in raw_files:
+            continue
+        frames.append({
+            **frame,
+            "stream_epoch": epoch,
+            "raw_time_us": raw_time_us,
+            "sync_mode": sync_mode,
+            "trigger_anchor_distance_ms": anchor_distance_ms,
+        })
     frames.sort(key=lambda item: (item["host_utc_ns"], item["sequence"]))
     if not frames:
         raise ValueError("同期再生できる保存フレームがありません。")
@@ -375,6 +731,12 @@ def playback_manifest(save_location, session_id):
         "raw_files": raw_files,
         "duration_ms": frames[-1]["relative_ms"],
         "frame_count": len(frames),
+        "sync_mode_counts": {
+            mode: sum(frame.get("sync_mode") == mode for frame in frames)
+            for mode in (
+                "paired_trigger", "host_time_interpolated", "segment_time_estimated")},
+        "partial_synchronization": any(
+            frame.get("sync_mode") != "paired_trigger" for frame in frames),
         "recording_roi": roi,
         "event_window_us": 33_000,
     }
@@ -385,10 +747,14 @@ class _RawState:
         self.path = path
         self.lock = threading.Lock()
         self.reader = None
+        self.height = 720
+        self.width = 1280
 
     def _new_reader(self):
         from metavision_core.event_io.raw_reader import RawReader
-        self.reader = RawReader(self.path, do_time_shifting=True)
+        self.reader = RawReader(
+            self.path, max_events=RAW_READER_MAX_EVENTS, do_time_shifting=True)
+        self.height, self.width = self.reader.get_size()
 
     def read_window(self, start_us, duration_us):
         with self.lock:
@@ -410,19 +776,38 @@ def _raw_state(path):
         return state
 
 
+def _state_geometry(state):
+    height = getattr(state, "height", 720)
+    width = getattr(state, "width", 1280)
+    if not isinstance(height, (int, np.integer)) or height <= 0:
+        height = 720
+    if not isinstance(width, (int, np.integer)) or width <= 0:
+        width = 1280
+    return int(height), int(width)
+
+
 @lru_cache(maxsize=384)
-def _render_event_jpeg(raw_path, center_us, window_us, max_width):
+def _render_event_jpeg(raw_path, center_us, window_us, max_width, palette):
     half_window = max(1_000, window_us // 2)
     start_us = max(0, center_us - half_window)
-    events = _raw_state(raw_path).read_window(start_us, max(2_000, window_us))
-    frame = np.full((720, 1280), 128, dtype=np.uint8)
+    state = _raw_state(raw_path)
+    events = state.read_window(start_us, max(2_000, window_us))
+    sensor_height, sensor_width = _state_geometry(state)
+    frame = (
+        np.full((sensor_height, sensor_width, 3), 128, dtype=np.uint8)
+        if palette == "magenta_cyan" else
+        np.full((sensor_height, sensor_width), 128, dtype=np.uint8))
     if len(events):
-        valid = ((events["x"] < 1280) & (events["y"] < 720))
+        valid = ((events["x"] < sensor_width) & (events["y"] < sensor_height))
         events = events[valid]
         negative = events[events["p"] == 0]
         positive = events[events["p"] != 0]
-        frame[negative["y"], negative["x"]] = 0
-        frame[positive["y"], positive["x"]] = 255
+        if palette == "magenta_cyan":
+            frame[negative["y"], negative["x"]] = (255, 255, 0)
+            frame[positive["y"], positive["x"]] = (255, 0, 255)
+        else:
+            frame[negative["y"], negative["x"]] = 0
+            frame[positive["y"], positive["x"]] = 255
     frame = cv2.flip(frame, 1)
     if max_width < frame.shape[1]:
         scale = max_width / frame.shape[1]
@@ -435,35 +820,58 @@ def _render_event_jpeg(raw_path, center_us, window_us, max_width):
 
 
 def render_event_window_jpeg(save_location, session_id, epoch, center_us,
-                             window_us=33_000, max_width=720, role="evs"):
+                             window_us=33_000, max_width=720, role="evs",
+                             palette="mono"):
     session_path = _safe_session_path(save_location, session_id)
     epoch = int(epoch)
     center_us = max(0, int(center_us))
     window_us = max(2_000, min(int(window_us), 500_000))
     max_width = max(160, min(int(max_width), 1280))
+    if palette not in {"mono", "magenta_cyan"}:
+        raise ValueError("EVS配色が不正です。")
     role = _validate_evs_role(role)
     raw_path = os.path.join(session_path, role, _raw_name_for_epoch(epoch))
     if not os.path.isfile(raw_path):
         raise FileNotFoundError("対応するEVS RAWセグメントがありません。")
-    return _render_event_jpeg(raw_path, center_us, window_us, max_width)
+    return _render_event_jpeg(raw_path, center_us, window_us, max_width, palette)
+
+
+def render_raw_event_window_jpeg(raw_path, center_us, window_us=33_000,
+                                 max_width=720, palette="mono"):
+    """Render one time window from a standalone RAW file."""
+    path = _safe_raw_path(raw_path)
+    center_us = max(0, int(center_us))
+    window_us = max(2_000, min(int(window_us), 500_000))
+    max_width = max(160, min(int(max_width), 1280))
+    if palette not in {"mono", "magenta_cyan"}:
+        raise ValueError("EVS配色が不正です。")
+    return _render_event_jpeg(path, center_us, window_us, max_width, palette)
 
 
 @lru_cache(maxsize=384)
-def _render_event_overlay_png(raw_path, center_us, window_us, max_width, max_events):
+def _render_event_overlay_png(
+        raw_path, center_us, window_us, max_width, max_events, palette):
     half_window = max(1_000, window_us // 2)
     start_us = max(0, center_us - half_window)
-    events = _raw_state(raw_path).read_window(start_us, max(2_000, window_us))
-    overlay = np.zeros((720, 1280, 4), dtype=np.uint8)
+    state = _raw_state(raw_path)
+    events = state.read_window(start_us, max(2_000, window_us))
+    sensor_height, sensor_width = _state_geometry(state)
+    overlay = np.zeros((sensor_height, sensor_width, 4), dtype=np.uint8)
     if len(events):
-        valid = ((events["x"] < 1280) & (events["y"] < 720))
+        valid = ((events["x"] < sensor_width) & (events["y"] < sensor_height))
         events = events[valid]
         if max_events and len(events) > max_events:
             stride = int(math.ceil(len(events) / max_events))
             events = events[::stride]
         negative = events[events["p"] == 0]
         positive = events[events["p"] != 0]
-        overlay[negative["y"], negative["x"]] = (0, 0, 0, 230)
-        overlay[positive["y"], positive["x"]] = (255, 255, 255, 230)
+        if palette == "magenta_cyan":
+            # BGRA: negative=cyan, positive=magenta
+            overlay[negative["y"], negative["x"]] = (255, 255, 0, 230)
+            overlay[positive["y"], positive["x"]] = (255, 0, 255, 230)
+        else:
+            overlay[negative["y"], negative["x"]] = (0, 0, 0, 230)
+            overlay[positive["y"], positive["x"]] = (255, 255, 255, 230)
     overlay = cv2.flip(overlay, 1)
     if max_width < overlay.shape[1]:
         scale = max_width / overlay.shape[1]
@@ -479,16 +887,18 @@ def _render_event_overlay_png(raw_path, center_us, window_us, max_width, max_eve
 
 def render_event_overlay_png(save_location, session_id, epoch, center_us,
                              window_us=33_000, max_width=960, max_events=50_000,
-                             role="evs"):
+                             role="evs", palette="mono"):
     session_path = _safe_session_path(save_location, session_id)
     epoch = int(epoch)
     center_us = max(0, int(center_us))
     window_us = max(2_000, min(int(window_us), 500_000))
     max_width = max(160, min(int(max_width), 1280))
     max_events = max(0, min(int(max_events), 2_000_000))
+    if palette not in {"mono", "magenta_cyan"}:
+        raise ValueError("EVS配色が不正です。")
     role = _validate_evs_role(role)
     raw_path = os.path.join(session_path, role, _raw_name_for_epoch(epoch))
     if not os.path.isfile(raw_path):
         raise FileNotFoundError("対応するEVS RAWセグメントがありません。")
     return _render_event_overlay_png(
-        raw_path, center_us, window_us, max_width, max_events)
+        raw_path, center_us, window_us, max_width, max_events, palette)

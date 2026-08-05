@@ -648,10 +648,21 @@ class EVSStreamer:
                 deadline = time.monotonic() + 30
                 while not os.path.exists(frame_summary_path) and time.monotonic() < deadline:
                     time.sleep(0.1)
-            synchronization = (
-                build_synchronization_report(session_root, session_id)
-                if self.role == "evs" else
-                {"generated": False, "reason": "dual EVS session"})
+            if self.role == "evs":
+                try:
+                    synchronization = build_synchronization_report(
+                        session_root, session_id)
+                except Exception as exc:
+                    # 同期索引は監査ログから再構築可能。索引生成の失敗で
+                    # session.json やEVS側の終了記録まで失わないようにする。
+                    synchronization = {
+                        "generated": False,
+                        "reason": f"停止時の同期索引生成に失敗しました: {exc}",
+                        "recoverable": True,
+                        "source": "primary_audit_logs",
+                    }
+            else:
+                synchronization = {"generated": False, "reason": "dual EVS session"}
             frame_summary = None
             if os.path.exists(frame_summary_path):
                 with open(frame_summary_path, encoding="utf-8") as frame_summary_file:
